@@ -1,7 +1,7 @@
 # First
 
 > 微信小程序调试工具 —— 基于 Frida + CDP 代理，支持 GUI 与 CLI 双模式
-
+> 改项目仅支持windows,macos用户使用dp虚拟机即可
 ---
 
 ## 截图预览
@@ -118,7 +118,8 @@ pyinstaller WMPFDebugger.spec
 本项目参考并学习了以下优秀工具的实现思路：
 
 - [evi0s/WMPFDebugger](https://github.com/evi0s/WMPFDebugger)
-
+- [0xsdeo/HeartK](https://github.com/0xsdeo/HeartK)
+- [残笑/FindSomething](https://github.com/momosecurity/FindSomething)
 ---
 
 ## 致谢
