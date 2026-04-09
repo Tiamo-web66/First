@@ -2,7 +2,7 @@
 
 > 微信小程序调试工具 —— 基于 Frida + CDP 代理，支持 GUI 与 CLI 双模式
 ---
-本项目仅支持windows，macos用户使用dp虚拟机即可
+本项目仅支持windows，macos用户使用pd虚拟机即可
 ## 截图预览
 
 ### 主界面 / Control Panel
