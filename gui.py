@@ -896,6 +896,7 @@ class App(QMainWindow):
     # ── 控制台 ──
 
     def _build_control(self):
+        """构建主控制台页面，提供连接参数、断点策略和运行状态。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 8, 24, 8)
@@ -917,6 +918,19 @@ class App(QMainWindow):
         row1.addWidget(self._cp_ent)
         row1.addStretch()
         c1_lay.addLayout(row1)
+
+        bp_row = QHBoxLayout()
+        self._tog_devtools_bp = ToggleSwitch(self._cfg.get("allow_devtools_breakpoints", False))
+        self._tog_devtools_bp.toggled.connect(self._on_devtools_breakpoints_toggled)
+        bp_row.addWidget(self._tog_devtools_bp)
+        bp_row.addWidget(QLabel("允许 DevTools 断点"))
+        bp_row.addSpacing(16)
+        self._devtools_bp_status_lbl = QLabel("")
+        self._devtools_bp_status_lbl.setProperty("class", "muted")
+        bp_row.addWidget(self._devtools_bp_status_lbl)
+        bp_row.addStretch()
+        c1_lay.addLayout(bp_row)
+        self._refresh_devtools_breakpoint_status()
 
         lay.addWidget(c1)
 
@@ -2997,6 +3011,7 @@ class App(QMainWindow):
         self.setStyleSheet(build_qss(self._tn))
         self._update_theme_label()
         self._update_toggle_colors()
+        self._refresh_devtools_breakpoint_status()
         self._refresh_sb_app_card()
         self._set_mcp_status("界面占位（服务待接入）" if self._mcp_running else "未启动",
                              self._mcp_running)
@@ -3010,8 +3025,10 @@ class App(QMainWindow):
         self._sb_theme.setText(txt)
 
     def _update_toggle_colors(self):
+        """根据当前主题刷新所有开关控件的开启和关闭颜色。"""
         c = _TH[self._tn]
-        for tog in (self._tog_dm, self._tog_df, self._tog_auto_dec, self._tog_auto_scan):
+        for tog in (self._tog_devtools_bp, self._tog_dm, self._tog_df,
+                    self._tog_auto_dec, self._tog_auto_scan):
             tog.set_colors(c["accent"], c["text4"])
         for tog in getattr(self, "_mcp_permission_toggles", {}).values():
             tog.set_colors(c["accent"], c["text4"])
@@ -3026,9 +3043,11 @@ class App(QMainWindow):
             self._sb_app_name.setStyleSheet(f"color: {c['text3']};")
 
     def _auto_save(self):
+        """保存 GUI 的主题、调试开关、提取配置和 MCP 权限配置。"""
         data = {
             "theme": self._tn,
             "cdp_port": self._cp_ent.text(),
+            "allow_devtools_breakpoints": self._devtools_breakpoints_enabled(),
             "debug_main": self._tog_dm.isChecked(),
             "debug_frida": self._tog_df.isChecked(),
             "extract_packages_dir": self._ext_path_ent.text(),
@@ -3586,7 +3605,9 @@ class App(QMainWindow):
             await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
             try:
                 await self._engine.send_cdp_command(
-                    "Debugger.setSkipAllPauses", {"skip": True}, timeout=3.0)
+                    "Debugger.setSkipAllPauses",
+                    {"skip": self._devtools_skip_all_pauses()},
+                    timeout=3.0)
             except Exception:
                 pass
             end_at = asyncio.get_event_loop().time() + wait_seconds
@@ -3610,7 +3631,9 @@ class App(QMainWindow):
         try:
             await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
             await self._engine.send_cdp_command(
-                "Debugger.setSkipAllPauses", {"skip": True}, timeout=3.0)
+                "Debugger.setSkipAllPauses",
+                {"skip": self._devtools_skip_all_pauses()},
+                timeout=3.0)
         except Exception:
             pass
         resp = await self._engine.send_cdp_command(
@@ -3869,7 +3892,60 @@ class App(QMainWindow):
     #  业务
     # ──────────────────────────────────
 
+    def _devtools_breakpoints_enabled(self):
+        """返回当前是否允许 Chrome DevTools 断点暂停小程序 JS。"""
+        if hasattr(self, "_tog_devtools_bp"):
+            return self._tog_devtools_bp.isChecked()
+        return bool(self._cfg.get("allow_devtools_breakpoints", False))
+
+    def _devtools_skip_all_pauses(self):
+        """返回当前是否需要让 CDP 跳过所有暂停点。"""
+        return not self._devtools_breakpoints_enabled()
+
+    def _refresh_devtools_breakpoint_status(self):
+        """刷新控制台中 DevTools 断点策略的状态展示。"""
+        if not hasattr(self, "_devtools_bp_status_lbl"):
+            return
+        c = _TH[self._tn]
+        if self._devtools_breakpoints_enabled():
+            self._devtools_bp_status_lbl.setText("状态: 允许暂停")
+            self._devtools_bp_status_lbl.setStyleSheet(f"color: {c['success']};")
+        else:
+            self._devtools_bp_status_lbl.setText("状态: 跳过暂停")
+            self._devtools_bp_status_lbl.setStyleSheet(f"color: {c['warning']};")
+
+    def _on_devtools_breakpoints_toggled(self, checked):
+        """处理控制台 DevTools 断点开关变化，并在运行中同步到小程序。"""
+        self._refresh_devtools_breakpoint_status()
+        self._auto_save()
+        if checked:
+            self._log_add("info", "[DevTools] 已允许断点暂停")
+        else:
+            self._log_add("warn", "[DevTools] 已切换为跳过暂停")
+        self._apply_devtools_breakpoint_mode()
+
+    def _apply_devtools_breakpoint_mode(self):
+        """通过 CDP 将当前断点策略应用到已连接的小程序运行时。"""
+        if not self._running or not self._engine or not self._loop or not self._loop.is_running():
+            return
+        if not getattr(self, "_miniapp_connected", False):
+            return
+        skip = self._devtools_skip_all_pauses()
+        fut = asyncio.run_coroutine_threadsafe(
+            self._engine.send_cdp_command(
+                "Debugger.setSkipAllPauses", {"skip": skip}, timeout=3.0),
+            self._loop)
+
+        def _done(done):
+            try:
+                done.result()
+            except Exception as e:
+                self._log_q.put(("warn", f"[DevTools] 断点策略同步失败: {e}"))
+
+        fut.add_done_callback(_done)
+
     def _copy_devtools_url(self):
+        """复制当前 DevTools 调试链接到剪贴板，并短暂显示复制状态。"""
         url = self._devtools_lbl.text()
         if url:
             QApplication.clipboard().setText(url)
@@ -3912,6 +3988,7 @@ class App(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _do_start(self):
+        """按控制台配置启动调试引擎，并生成 DevTools 连接地址。"""
         if self._running:
             return
         try:
@@ -3923,6 +4000,7 @@ class App(QMainWindow):
             cdp_port=cp,
             debug_main=self._tog_dm.isChecked(),
             debug_frida=self._tog_df.isChecked(),
+            allow_devtools_breakpoints=self._devtools_breakpoints_enabled(),
             scripts_dir="",
             script_files=[])
         logger = Logger(opts)
@@ -4643,6 +4721,7 @@ class App(QMainWindow):
             self._mcp_add_log(item[1])
 
     def _apply_sts(self, sts):
+        """更新主界面连接状态，并在小程序连接变化时触发相关后台动作。"""
         c = _TH[self._tn]
         is_connected = sts.get("miniapp", False)
         for key, (dot, lb, name) in self._dots.items():
@@ -4671,6 +4750,8 @@ class App(QMainWindow):
             self._global_inject_gen += 1
             _gi_gen = self._global_inject_gen
             QTimer.singleShot(1500, lambda: self._do_global_inject(_gi_gen))
+        if is_connected and not self._miniapp_connected:
+            QTimer.singleShot(700, self._apply_devtools_breakpoint_mode)
         # 连接时延迟启用，等连接稳定（防止重启时反复抖动）
         self._vc_stable_gen += 1
         gen_stable = self._vc_stable_gen

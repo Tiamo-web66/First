@@ -188,6 +188,26 @@ class DebugEngine:
         await self.send_cdp_command("Network.setExtraHTTPHeaders",
                                     {"headers": headers})
 
+    def _allow_devtools_breakpoints(self):
+        """Return whether DevTools breakpoints should be allowed to pause execution."""
+        return bool(getattr(self.options, "allow_devtools_breakpoints", False))
+
+    def _build_skip_all_pauses_command(self, cmd_id):
+        """Build the CDP command that applies the current DevTools pause policy."""
+        skip = not self._allow_devtools_breakpoints()
+        return json.dumps({
+            "id": cmd_id,
+            "method": "Debugger.setSkipAllPauses",
+            "params": {"skip": skip},
+        })
+
+    def _log_skip_all_pauses_mode(self):
+        """Record the active DevTools pause policy in the main log."""
+        if self._allow_devtools_breakpoints():
+            self.logger.info("[devtools] breakpoints enabled, pauses are allowed")
+        else:
+            self.logger.info("[anti-debug] Debugger.setSkipAllPauses(true) sent")
+
     def on_cdp_event(self, method, callback):
         """Subscribe to a CDP event by method name (e.g. 'Debugger.scriptParsed')."""
         self._event_listeners.setdefault(method, []).append(callback)
@@ -221,6 +241,7 @@ class DebugEngine:
     # ── Debug Server ──
 
     async def _start_debug_server(self):
+        """Start the miniapp debug server and bridge miniapp messages to CDP clients."""
         engine = self
         logger = self.logger
         bus = self.bus
@@ -279,10 +300,10 @@ class DebugEngine:
                     logger.info("[anti-debug] Debugger.enable sent")
                     seq += 1
                     await websocket.send(_build_protobuf_cdp_message(
-                        json.dumps({"id": cmd_id, "method": "Debugger.setSkipAllPauses", "params": {"skip": True}}), seq
+                        engine._build_skip_all_pauses_command(cmd_id), seq
                     ))
                     cmd_id += 1
-                    logger.info("[anti-debug] Debugger.setSkipAllPauses(true) sent")
+                    engine._log_skip_all_pauses_mode()
                     for script in userscripts:
                         seq += 1
                         await websocket.send(_build_protobuf_cdp_message(
@@ -321,10 +342,10 @@ class DebugEngine:
                             cmd_id += 1
                             seq += 1
                             await websocket.send(_build_protobuf_cdp_message(
-                                json.dumps({"id": cmd_id, "method": "Debugger.setSkipAllPauses", "params": {"skip": True}}), seq
+                                engine._build_skip_all_pauses_command(cmd_id), seq
                             ))
                             cmd_id += 1
-                            logger.info("[anti-debug] Debugger.setSkipAllPauses re-sent after setupContext")
+                            engine._log_skip_all_pauses_mode()
                             for script in userscripts:
                                 wrapped = build_injection_wrapper(script)
                                 seq += 1

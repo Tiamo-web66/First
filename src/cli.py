@@ -8,13 +8,16 @@ CDP_PORT = 62000
 
 class CliOptions:
     def __init__(self, cdp_port: int, debug_main: bool, debug_frida: bool,
-                 scripts_dir: str = "", script_files: list = None):
+                 scripts_dir: str = "", script_files: list = None,
+                 allow_devtools_breakpoints: bool = False):
+        """保存 CLI/GUI 启动调试引擎所需的端口、日志和断点策略配置。"""
         self.debug_port = DEBUG_PORT  # 小程序硬编码 9421，不可修改
         self.cdp_port = cdp_port
         self.debug_main = debug_main
         self.debug_frida = debug_frida
         self.scripts_dir = scripts_dir
         self.script_files = script_files or []
+        self.allow_devtools_breakpoints = allow_devtools_breakpoints
 
 
 def parse_port(name: str, value, default_value: int) -> int:
@@ -30,6 +33,7 @@ def parse_port(name: str, value, default_value: int) -> int:
 
 
 def parse_cli_options() -> CliOptions:
+    """解析命令行参数，并返回调试引擎可直接使用的配置对象。"""
     parser = argparse.ArgumentParser(
         description="First - WeChat Miniapp Debugger",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -51,6 +55,8 @@ Usage:
                         help="Output main process debug messages")
     parser.add_argument("--debug-frida", action="store_true", default=False,
                         help="Output Frida client messages")
+    parser.add_argument("--allow-breakpoints", action="store_true", default=False,
+                        help="Allow Chrome DevTools breakpoints instead of skipping all pauses")
     parser.add_argument("--scripts-dir", type=str, default=None,
                         help="UserScripts directory path (default: ./userscripts)")
     parser.add_argument("--script", type=str, action="append", default=None,
@@ -75,4 +81,5 @@ Usage:
         debug_frida=args.debug_frida,
         scripts_dir=scripts_dir,
         script_files=script_files,
+        allow_devtools_breakpoints=args.allow_breakpoints,
     )
