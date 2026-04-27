@@ -662,7 +662,7 @@ class App(QMainWindow):
         _ico = os.path.join(_BASE_DIR, "icon.png")
         if os.path.exists(_ico):
             self.setWindowIcon(QIcon(_ico))
-        self.resize(960, 620)
+        self.resize(960, 700)
         self.setMinimumSize(780, 500)
 
         self._cfg = _load_cfg()
@@ -1379,6 +1379,7 @@ class App(QMainWindow):
     # ── MCP ──
 
     def _build_mcp(self):
+        """构建 MCP 控制台页面，展示服务状态、连接信息、权限和日志。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 12, 24, 16)
@@ -1389,7 +1390,7 @@ class App(QMainWindow):
         status_lay = QVBoxLayout(status_card)
         status_lay.setContentsMargins(16, 12, 16, 12)
         status_lay.setSpacing(8)
-        status_lay.addWidget(_make_label("MCP 服务状态", bold=True))
+        status_lay.addWidget(_make_label("本地 MCP 服务", bold=True))
 
         mcp_row = QHBoxLayout()
         self._mcp_status_dot = StatusDot()
@@ -1410,7 +1411,23 @@ class App(QMainWindow):
                     self._mcp_route_lbl):
             lbl.setProperty("class", "muted")
             status_lay.addWidget(lbl)
-        lay.addWidget(status_card)
+
+        ctrl_row = QHBoxLayout()
+        self._btn_mcp_start = _make_btn("启动 MCP", self._do_mcp_start)
+        self._btn_mcp_stop = _make_btn("停止 MCP", self._do_mcp_stop)
+        self._btn_mcp_restart = _make_btn("重启 MCP", self._do_mcp_restart)
+        self._btn_mcp_stop.setEnabled(False)
+        self._btn_mcp_restart.setEnabled(False)
+        ctrl_row.addWidget(self._btn_mcp_start)
+        ctrl_row.addWidget(self._btn_mcp_stop)
+        ctrl_row.addWidget(self._btn_mcp_restart)
+        ctrl_row.addStretch()
+        status_lay.addLayout(ctrl_row)
+
+        tip = QLabel("当前提供本地 MCP HTTP 服务，外部 AI 可按权限调用调试工具。")
+        tip.setWordWrap(True)
+        tip.setProperty("class", "muted")
+        status_lay.addWidget(tip)
 
         conn_card = _make_card()
         conn_lay = QVBoxLayout(conn_card)
@@ -1431,8 +1448,8 @@ class App(QMainWindow):
 
         self._mcp_config_box = QTextEdit()
         self._mcp_config_box.setReadOnly(True)
-        self._mcp_config_box.setMinimumHeight(132)
-        self._mcp_config_box.setMaximumHeight(170)
+        self._mcp_config_box.setMinimumHeight(110)
+        self._mcp_config_box.setMaximumHeight(140)
         self._mcp_config_box.setLineWrapMode(QTextEdit.NoWrap)
         self._mcp_config_box.setFont(QFont(_FM, 8))
         self._mcp_config_box.setPlainText(self._mcp_client_config())
@@ -1443,29 +1460,12 @@ class App(QMainWindow):
         cfg_row.addWidget(self._btn_mcp_copy_cfg)
         cfg_row.addStretch()
         conn_lay.addLayout(cfg_row)
-        lay.addWidget(conn_card)
 
-        ctrl_card = _make_card()
-        ctrl_lay = QVBoxLayout(ctrl_card)
-        ctrl_lay.setContentsMargins(16, 12, 16, 12)
-        ctrl_lay.setSpacing(8)
-        ctrl_lay.addWidget(_make_label("服务控制", bold=True))
-        ctrl_row = QHBoxLayout()
-        self._btn_mcp_start = _make_btn("启动 MCP", self._do_mcp_start)
-        self._btn_mcp_stop = _make_btn("停止 MCP", self._do_mcp_stop)
-        self._btn_mcp_restart = _make_btn("重启 MCP", self._do_mcp_restart)
-        self._btn_mcp_stop.setEnabled(False)
-        self._btn_mcp_restart.setEnabled(False)
-        ctrl_row.addWidget(self._btn_mcp_start)
-        ctrl_row.addWidget(self._btn_mcp_stop)
-        ctrl_row.addWidget(self._btn_mcp_restart)
-        ctrl_row.addStretch()
-        ctrl_lay.addLayout(ctrl_row)
-        tip = QLabel("当前提供本地 MCP HTTP 服务，外部 AI 可按权限调用调试工具。")
-        tip.setWordWrap(True)
-        tip.setProperty("class", "muted")
-        ctrl_lay.addWidget(tip)
-        lay.addWidget(ctrl_card)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(status_card, 1)
+        top_row.addWidget(conn_card, 2)
+        lay.addLayout(top_row)
 
         perm_card = _make_card()
         perm_lay = QVBoxLayout(perm_card)
