@@ -830,21 +830,12 @@ class App(QMainWindow):
         self._sb_theme.mousePressEvent = lambda e: self._toggle_theme()
         sb_lay.addWidget(self._sb_theme)
 
-        sb_author = QLabel("by vs-olitus")
+        sb_author = QLabel("by TiAmo")
         sb_author.setObjectName("sb_theme")
         sb_author.setAlignment(Qt.AlignCenter)
         sb_author.setFont(QFont(_FN, 8))
         sb_lay.addWidget(sb_author)
-        sb_gh = QLabel("github.com/Spade-sec/First")
-        sb_gh.setObjectName("sb_theme")
-        sb_gh.setAlignment(Qt.AlignCenter)
-        sb_gh.setFont(QFont(_FN, 7))
-        sb_gh.setCursor(Qt.PointingHandCursor)
-        sb_gh.mousePressEvent = lambda e: (
-            QDesktopServices.openUrl(QUrl("https://github.com/Spade-sec/First")),
-            self._log_add("info", "[gui] 已打开 GitHub 页面"))
-        sb_lay.addWidget(sb_gh)
-        sb_ver = QLabel("v1.0.7")
+        sb_ver = QLabel("v1.0")
         sb_ver.setObjectName("sb_theme")
         sb_ver.setAlignment(Qt.AlignCenter)
         sb_ver.setFont(QFont(_FN, 7))
