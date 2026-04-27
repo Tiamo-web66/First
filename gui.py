@@ -58,6 +58,7 @@ _MENU = [
     ("navigator", "⬡", "路由导航"),
     ("hook",      "◈", "Hook"),
     ("cloud",     "☁", "云扫描"),
+    ("mcp",       "M", "MCP"),
     ("extract",   "◆", "敏感信息提取"),
     ("vconsole",  "◇", "调试开关"),
     ("logs",      "≡", "运行日志"),
@@ -671,6 +672,10 @@ class App(QMainWindow):
         self._miniapp_connected = False
         self._sb_fetch_gen = 0
         self._vc_stable_gen = 0
+        self._mcp_running = False
+        self._mcp_endpoint = self._cfg.get("mcp_endpoint", "http://127.0.0.1:8765/mcp")
+        self._mcp_appid = ""
+        self._mcp_route = ""
         self._log_q = queue.Queue()
         self._sts_q = queue.Queue()
         self._rte_q = queue.Queue()
@@ -863,6 +868,7 @@ class App(QMainWindow):
         self._build_navigator()
         self._build_hook()
         self._build_cloud()
+        self._build_mcp()
         self._build_extract()
         self._build_vconsole()
         self._build_logs()
@@ -1349,6 +1355,119 @@ class App(QMainWindow):
 
         self._stack.addWidget(page)
         self._page_map["cloud"] = self._stack.count() - 1
+
+    # ── MCP ──
+
+    def _build_mcp(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(24, 12, 24, 16)
+        lay.setSpacing(10)
+        lay.setAlignment(Qt.AlignTop)
+
+        status_card = _make_card()
+        status_lay = QVBoxLayout(status_card)
+        status_lay.setContentsMargins(16, 12, 16, 12)
+        status_lay.setSpacing(8)
+        status_lay.addWidget(_make_label("MCP 服务状态", bold=True))
+
+        mcp_row = QHBoxLayout()
+        self._mcp_status_dot = StatusDot()
+        mcp_row.addWidget(self._mcp_status_dot)
+        self._mcp_status_lbl = QLabel("MCP: 未启动")
+        self._mcp_status_lbl.setProperty("class", "muted")
+        mcp_row.addWidget(self._mcp_status_lbl)
+        mcp_row.addStretch()
+        status_lay.addLayout(mcp_row)
+
+        self._mcp_frida_lbl = QLabel("Frida: 未连接")
+        self._mcp_miniapp_lbl = QLabel("MiniApp: 未连接")
+        self._mcp_devtools_lbl = QLabel("CDP: 未连接")
+        self._mcp_app_lbl = QLabel("AppID: --")
+        self._mcp_route_lbl = QLabel("当前路由: --")
+        for lbl in (self._mcp_frida_lbl, self._mcp_miniapp_lbl,
+                    self._mcp_devtools_lbl, self._mcp_app_lbl,
+                    self._mcp_route_lbl):
+            lbl.setProperty("class", "muted")
+            status_lay.addWidget(lbl)
+        lay.addWidget(status_card)
+
+        conn_card = _make_card()
+        conn_lay = QVBoxLayout(conn_card)
+        conn_lay.setContentsMargins(16, 12, 16, 12)
+        conn_lay.setSpacing(8)
+        conn_lay.addWidget(_make_label("连接信息", bold=True))
+
+        addr_row = QHBoxLayout()
+        addr_row.addWidget(QLabel("MCP 地址"))
+        self._mcp_addr_ent = _make_entry(width=None)
+        self._mcp_addr_ent.setText(self._mcp_endpoint)
+        self._mcp_addr_ent.setReadOnly(True)
+        self._mcp_addr_ent.setFont(QFont(_FM, 9))
+        addr_row.addWidget(self._mcp_addr_ent, 1)
+        self._btn_mcp_copy_addr = _make_btn("复制地址", self._copy_mcp_address)
+        addr_row.addWidget(self._btn_mcp_copy_addr)
+        conn_lay.addLayout(addr_row)
+
+        self._mcp_config_box = QTextEdit()
+        self._mcp_config_box.setReadOnly(True)
+        self._mcp_config_box.setMinimumHeight(132)
+        self._mcp_config_box.setMaximumHeight(170)
+        self._mcp_config_box.setLineWrapMode(QTextEdit.NoWrap)
+        self._mcp_config_box.setFont(QFont(_FM, 8))
+        self._mcp_config_box.setPlainText(self._mcp_client_config())
+        conn_lay.addWidget(self._mcp_config_box)
+
+        cfg_row = QHBoxLayout()
+        self._btn_mcp_copy_cfg = _make_btn("复制客户端配置", self._copy_mcp_config)
+        cfg_row.addWidget(self._btn_mcp_copy_cfg)
+        cfg_row.addStretch()
+        conn_lay.addLayout(cfg_row)
+        lay.addWidget(conn_card)
+
+        ctrl_card = _make_card()
+        ctrl_lay = QVBoxLayout(ctrl_card)
+        ctrl_lay.setContentsMargins(16, 12, 16, 12)
+        ctrl_lay.setSpacing(8)
+        ctrl_lay.addWidget(_make_label("服务控制", bold=True))
+        ctrl_row = QHBoxLayout()
+        self._btn_mcp_start = _make_btn("启动 MCP", self._do_mcp_start)
+        self._btn_mcp_stop = _make_btn("停止 MCP", self._do_mcp_stop)
+        self._btn_mcp_restart = _make_btn("重启 MCP", self._do_mcp_restart)
+        self._btn_mcp_stop.setEnabled(False)
+        self._btn_mcp_restart.setEnabled(False)
+        ctrl_row.addWidget(self._btn_mcp_start)
+        ctrl_row.addWidget(self._btn_mcp_stop)
+        ctrl_row.addWidget(self._btn_mcp_restart)
+        ctrl_row.addStretch()
+        ctrl_lay.addLayout(ctrl_row)
+        tip = QLabel("阶段 1 仅提供 MCP 控制台界面；真实 MCP 服务会在后续阶段接入。")
+        tip.setWordWrap(True)
+        tip.setProperty("class", "muted")
+        ctrl_lay.addWidget(tip)
+        lay.addWidget(ctrl_card)
+
+        log_hdr = QHBoxLayout()
+        log_hdr.addWidget(_make_label("MCP 日志", bold=True))
+        log_hdr.addStretch()
+        self._btn_mcp_clear_log = _make_btn("清空", self._clear_mcp_log)
+        log_hdr.addWidget(self._btn_mcp_clear_log)
+        lay.addLayout(log_hdr)
+
+        log_card = _make_card()
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(0, 0, 0, 0)
+        self._mcp_logbox = QTextEdit()
+        self._mcp_logbox.setReadOnly(True)
+        self._mcp_logbox.setFont(QFont(_FM, 9))
+        log_lay.addWidget(self._mcp_logbox)
+        lay.addWidget(log_card, 1)
+
+        self._set_mcp_status("未启动", False)
+        self._mcp_add_log("MCP 页面已就绪，等待服务骨架接入。")
+
+        self._stack.addWidget(page)
+        self._page_map["mcp"] = self._stack.count() - 1
 
     # ── 敏感信息提取 ──
 
@@ -2831,6 +2950,9 @@ class App(QMainWindow):
         self._update_theme_label()
         self._update_toggle_colors()
         self._refresh_sb_app_card()
+        self._set_mcp_status("界面占位（服务待接入）" if self._mcp_running else "未启动",
+                             self._mcp_running)
+        self._update_mcp_debug_status()
         self._ext_refresh_custom_patterns()
         self._hl_sb()
         self._auto_save()
@@ -2866,6 +2988,81 @@ class App(QMainWindow):
             "global_hook_scripts": list(self._global_hook_scripts),
         }
         _save_cfg(data)
+
+    def _mcp_client_config(self):
+        return json.dumps({
+            "mcpServers": {
+                "first-debugger": {
+                    "url": self._mcp_endpoint
+                }
+            }
+        }, indent=2, ensure_ascii=False)
+
+    def _set_mcp_status(self, text, running):
+        self._mcp_running = running
+        if not hasattr(self, "_mcp_status_lbl"):
+            return
+        c = _TH[self._tn]
+        self._mcp_status_lbl.setText(f"MCP: {text}")
+        self._mcp_status_lbl.setStyleSheet(f"color: {c['success'] if running else c['text2']};")
+        self._mcp_status_dot.set_color(c["success"] if running else c["text4"])
+        self._btn_mcp_start.setEnabled(not running)
+        self._btn_mcp_stop.setEnabled(running)
+        self._btn_mcp_restart.setEnabled(running)
+
+    def _mcp_add_log(self, text):
+        if not hasattr(self, "_mcp_logbox"):
+            return
+        self._mcp_logbox.append(text)
+        sb = self._mcp_logbox.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _clear_mcp_log(self):
+        if hasattr(self, "_mcp_logbox"):
+            self._mcp_logbox.clear()
+
+    def _copy_mcp_address(self):
+        QApplication.clipboard().setText(self._mcp_endpoint)
+        self._mcp_add_log(f"已复制 MCP 地址: {self._mcp_endpoint}")
+        self._log_add("info", "[MCP] MCP 地址已复制到剪贴板")
+
+    def _copy_mcp_config(self):
+        cfg = self._mcp_client_config()
+        QApplication.clipboard().setText(cfg)
+        self._mcp_add_log("已复制 MCP 客户端配置")
+        self._log_add("info", "[MCP] 客户端配置已复制到剪贴板")
+
+    def _do_mcp_start(self):
+        self._set_mcp_status("界面占位（服务待接入）", True)
+        self._mcp_add_log("启动 MCP：阶段 1 仅更新界面状态，真实服务将在阶段 3 接入。")
+        self._log_add("info", "[MCP] MCP 控制台进入占位运行状态")
+
+    def _do_mcp_stop(self):
+        self._set_mcp_status("未启动", False)
+        self._mcp_add_log("停止 MCP：已恢复为未启动状态。")
+        self._log_add("info", "[MCP] MCP 控制台已停止")
+
+    def _do_mcp_restart(self):
+        self._mcp_add_log("重启 MCP：当前为界面占位状态，未启动真实服务。")
+        self._set_mcp_status("界面占位（服务待接入）", True)
+        self._log_add("info", "[MCP] MCP 控制台已刷新占位状态")
+
+    def _update_mcp_debug_status(self, sts=None):
+        if not hasattr(self, "_mcp_frida_lbl"):
+            return
+        c = _TH[self._tn]
+        sts = sts or (self._engine.status if self._engine else {})
+        items = [
+            ("frida", self._mcp_frida_lbl, "Frida"),
+            ("miniapp", self._mcp_miniapp_lbl, "MiniApp"),
+            ("devtools", self._mcp_devtools_lbl, "CDP"),
+        ]
+        for key, lbl, name in items:
+            on = sts.get(key, False)
+            lbl.setText(f"{name}: {'已连接' if on else '未连接'}")
+            lbl.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
+        self._mcp_app_lbl.setText(f"AppID: {self._mcp_appid or '--'}")
+        self._mcp_route_lbl.setText(f"当前路由: /{self._mcp_route}" if self._mcp_route else "当前路由: --")
 
     # ──────────────────────────────────
     #  业务
@@ -3000,6 +3197,9 @@ class App(QMainWindow):
         self._app_lbl.setText("AppID: --")
         self._appname_lbl.setText("")
         self._appname_lbl.setVisible(False)
+        self._mcp_appid = ""
+        self._mcp_route = ""
+        self._update_mcp_debug_status({"frida": False, "miniapp": False, "devtools": False})
 
     def _nav_btns(self, on):
         for b in (self._btn_go, self._btn_relaunch,
@@ -3637,6 +3837,7 @@ class App(QMainWindow):
             dot.set_color(c["success"] if on else c["text4"])
             lb.setText(f"{name}: {'已连接' if on else '未连接'}")
             lb.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
+        self._update_mcp_debug_status(sts)
         # 断开时立即禁用（除了已有路由时保留导航按钮）
         if not is_connected and self._miniapp_connected:
             if not self._all_routes:
@@ -3675,6 +3876,8 @@ class App(QMainWindow):
             aid = info.get("appid", "")
             aname = info.get("name", "")
             ent = info.get("entry", "")
+            self._mcp_appid = aid
+            self._update_mcp_debug_status()
             # 运行状态卡片 — appid
             txt = f"AppID: {aid}" if aid else "AppID: --"
             if ent:
@@ -3700,6 +3903,8 @@ class App(QMainWindow):
                 self._sb_app_id.setVisible(False)
         elif kind == "current":
             r = item[1]
+            self._mcp_route = r
+            self._update_mcp_debug_status()
             self._route_lbl.setText(f"当前路由: /{r}" if r else "当前路由: --")
             if r:
                 routes = self._flat_routes or self._all_routes
