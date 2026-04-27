@@ -63,6 +63,16 @@ _MENU = [
     ("vconsole",  "◇", "调试开关"),
     ("logs",      "≡", "运行日志"),
 ]
+_MCP_PERMISSIONS = [
+    ("read_status", "读取状态", True),
+    ("read_requests", "读取请求", True),
+    ("read_scripts", "读取源码", True),
+    ("navigate_page", "页面跳转", True),
+    ("auto_visit", "自动访问", False),
+    ("inject_probe", "注入探针", False),
+    ("call_cloud", "调用云函数", False),
+    ("export_report", "导出报告", True),
+]
 
 # ══════════════════════════════════════════
 #  配置持久化
@@ -676,6 +686,9 @@ class App(QMainWindow):
         self._mcp_endpoint = self._cfg.get("mcp_endpoint", "http://127.0.0.1:8765/mcp")
         self._mcp_appid = ""
         self._mcp_route = ""
+        self._mcp_permissions = {k: default for k, _, default in _MCP_PERMISSIONS}
+        self._mcp_permissions.update(self._cfg.get("mcp_permissions", {}))
+        self._mcp_permission_toggles = {}
         self._log_q = queue.Queue()
         self._sts_q = queue.Queue()
         self._rte_q = queue.Queue()
@@ -1441,11 +1454,39 @@ class App(QMainWindow):
         ctrl_row.addWidget(self._btn_mcp_restart)
         ctrl_row.addStretch()
         ctrl_lay.addLayout(ctrl_row)
-        tip = QLabel("阶段 1 仅提供 MCP 控制台界面；真实 MCP 服务会在后续阶段接入。")
+        tip = QLabel("当前提供 MCP 控制台与权限管理；真实 MCP 服务会在后续阶段接入。")
         tip.setWordWrap(True)
         tip.setProperty("class", "muted")
         ctrl_lay.addWidget(tip)
         lay.addWidget(ctrl_card)
+
+        perm_card = _make_card()
+        perm_lay = QVBoxLayout(perm_card)
+        perm_lay.setContentsMargins(16, 12, 16, 12)
+        perm_lay.setSpacing(8)
+        perm_lay.addWidget(_make_label("权限开关", bold=True))
+        perm_tip = QLabel("读取类能力默认允许；自动访问、探针注入、云函数调用等高影响能力需单独开启。")
+        perm_tip.setWordWrap(True)
+        perm_tip.setProperty("class", "muted")
+        perm_lay.addWidget(perm_tip)
+
+        perm_grid = QVBoxLayout()
+        perm_grid.setSpacing(6)
+        for i in range(0, len(_MCP_PERMISSIONS), 2):
+            row = QHBoxLayout()
+            row.setSpacing(18)
+            for key, label, _ in _MCP_PERMISSIONS[i:i + 2]:
+                cell = QHBoxLayout()
+                tog = ToggleSwitch(bool(self._mcp_permissions.get(key, False)))
+                tog.toggled.connect(lambda checked, k=key: self._set_mcp_permission(k, checked))
+                self._mcp_permission_toggles[key] = tog
+                cell.addWidget(tog)
+                cell.addWidget(QLabel(label))
+                cell.addStretch()
+                row.addLayout(cell, 1)
+            perm_grid.addLayout(row)
+        perm_lay.addLayout(perm_grid)
+        lay.addWidget(perm_card)
 
         log_hdr = QHBoxLayout()
         log_hdr.addWidget(_make_label("MCP 日志", bold=True))
@@ -2965,6 +3006,8 @@ class App(QMainWindow):
         c = _TH[self._tn]
         for tog in (self._tog_dm, self._tog_df, self._tog_auto_dec, self._tog_auto_scan):
             tog.set_colors(c["accent"], c["text4"])
+        for tog in getattr(self, "_mcp_permission_toggles", {}).values():
+            tog.set_colors(c["accent"], c["text4"])
 
     def _refresh_sb_app_card(self):
         """主题切换时刷新侧栏小程序卡片颜色。"""
@@ -2986,6 +3029,8 @@ class App(QMainWindow):
             "auto_decompile": self._tog_auto_dec.isChecked(),
             "auto_scan": self._tog_auto_scan.isChecked(),
             "global_hook_scripts": list(self._global_hook_scripts),
+            "mcp_endpoint": self._mcp_endpoint,
+            "mcp_permissions": dict(self._mcp_permissions),
         }
         _save_cfg(data)
 
@@ -3017,6 +3062,22 @@ class App(QMainWindow):
         sb = self._mcp_logbox.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    def _set_mcp_permission(self, key, enabled):
+        self._mcp_permissions[key] = bool(enabled)
+        label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
+        self._mcp_add_log(f"权限变更: {label} -> {'允许' if enabled else '禁止'}")
+        self._auto_save()
+
+    def _mcp_has_permission(self, key):
+        return bool(self._mcp_permissions.get(key, False))
+
+    def _mcp_check_permission(self, key):
+        allowed = self._mcp_has_permission(key)
+        if not allowed:
+            label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
+            self._mcp_add_log(f"权限拒绝: {label}")
+        return allowed
+
     def _clear_mcp_log(self):
         if hasattr(self, "_mcp_logbox"):
             self._mcp_logbox.clear()
@@ -3034,7 +3095,7 @@ class App(QMainWindow):
 
     def _do_mcp_start(self):
         self._set_mcp_status("界面占位（服务待接入）", True)
-        self._mcp_add_log("启动 MCP：阶段 1 仅更新界面状态，真实服务将在阶段 3 接入。")
+        self._mcp_add_log("启动 MCP：当前仅更新界面状态，真实服务将在阶段 3 接入。")
         self._log_add("info", "[MCP] MCP 控制台进入占位运行状态")
 
     def _do_mcp_stop(self):
