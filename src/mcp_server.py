@@ -3,6 +3,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
 
 class _ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -20,6 +21,7 @@ class McpHttpService:
         self.host = host
         self.port = int(port)
         self.path = path or "/mcp"
+        self.max_body_size = 1024 * 1024
         self._server = None
         self._thread = None
 
@@ -67,16 +69,20 @@ class McpHttpService:
                 self._send_json({"ok": True})
 
             def do_GET(self):
-                if self.path not in (service.path, "/health"):
+                if self.path == "/health":
+                    self._send_json({"ok": True})
+                    return
+                if self.path != service.path:
                     self._send_json({"ok": False, "error": "not found"}, status=404)
                     return
                 payload = {
                     "ok": True,
                     "name": "first-debugger",
                     "transport": "http",
+                    "phase": 4,
                     "path": service.path,
                     "status": service.runtime.get_context(),
-                    "tools": [],
+                    "tools": [tool["name"] for tool in service.runtime.list_tools()],
                 }
                 self._send_json(payload)
 
@@ -86,6 +92,9 @@ class McpHttpService:
                     return
                 try:
                     length = int(self.headers.get("Content-Length", "0") or "0")
+                    if length > service.max_body_size:
+                        self._send_json(self._rpc_error(None, -32600, "request body too large"))
+                        return
                     raw = self.rfile.read(length).decode("utf-8") if length else "{}"
                     request = json.loads(raw)
                 except Exception as exc:
@@ -109,9 +118,20 @@ class McpHttpService:
                 if method == "ping":
                     return self._rpc_result(req_id, {})
                 if method == "tools/list":
-                    return self._rpc_result(req_id, {"tools": []})
+                    return self._rpc_result(req_id, {"tools": service.runtime.list_tools()})
                 if method == "tools/call":
-                    return self._rpc_error(req_id, -32601, "no tools registered in phase 3")
+                    params = request.get("params", {}) or {}
+                    name = params.get("name", "")
+                    arguments = params.get("arguments", {}) or {}
+                    result = service.runtime.call_tool(name, arguments)
+                    is_error = not bool(result.get("ok", True)) if isinstance(result, dict) else False
+                    return self._rpc_result(req_id, {
+                        "content": [{
+                            "type": "text",
+                            "text": json.dumps(result, ensure_ascii=False, indent=2),
+                        }],
+                        "isError": is_error,
+                    })
                 return self._rpc_error(req_id, -32601, f"method not found: {method}")
 
             def _rpc_result(self, req_id, result):
@@ -128,7 +148,10 @@ class McpHttpService:
                 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
+                origin = self.headers.get("Origin", "")
+                parsed_origin = urlparse(origin) if origin else None
+                if parsed_origin and parsed_origin.scheme == "http" and parsed_origin.hostname in ("127.0.0.1", "localhost"):
+                    self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Access-Control-Allow-Headers", "content-type")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header("Content-Length", str(len(body)))

@@ -71,6 +71,7 @@ _MCP_PERMISSIONS = [
     ("read_requests", "读取请求", True),
     ("read_scripts", "读取源码", True),
     ("navigate_page", "页面跳转", True),
+    ("execute_js", "执行 JS", False),
     ("auto_visit", "自动访问", False),
     ("inject_probe", "注入探针", False),
     ("call_cloud", "调用云函数", False),
@@ -3089,6 +3090,14 @@ class App(QMainWindow):
             self._mcp_add_log(f"权限拒绝: {label}")
         return allowed
 
+    def _mcp_require_permission(self, key):
+        """Thread-safe permission check used by MCP tool handlers."""
+        allowed = self._mcp_has_permission(key)
+        if not allowed:
+            label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
+            self._mcp_q.put(("log", f"权限拒绝: {label}"))
+        return allowed
+
     def _clear_mcp_log(self):
         """Clear the MCP page log box."""
         if hasattr(self, "_mcp_logbox"):
@@ -3113,12 +3122,17 @@ class App(QMainWindow):
             return
         try:
             parsed = urlparse(self._mcp_endpoint)
+            if parsed.scheme != "http" or not parsed.hostname:
+                raise ValueError("MCP 地址必须是 http://host:port/path 格式")
             host = parsed.hostname or "127.0.0.1"
+            if host not in ("127.0.0.1", "localhost"):
+                raise ValueError("MCP 服务仅允许监听 127.0.0.1 或 localhost")
             port = parsed.port or 8765
             path = parsed.path or "/mcp"
             runtime = McpRuntime(
                 context_getter=self._mcp_context_snapshot,
                 permission_checker=self._mcp_has_permission,
+                tool_handler=self._mcp_call_tool,
                 log_callback=lambda msg: self._mcp_q.put(("log", msg)),
             )
             self._mcp_service = McpHttpService(runtime, host=host, port=port, path=path)
@@ -3183,6 +3197,87 @@ class App(QMainWindow):
             "route": self._mcp_route,
             "permissions": dict(self._mcp_permissions),
         }
+
+    def _mcp_call_tool(self, name, arguments):
+        """Handle basic MCP tools from the HTTP service thread."""
+        self._mcp_q.put(("log", f"调用工具: {name}"))
+        if name == "get_status":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            return self._mcp_context_snapshot()
+        if name == "evaluate_js":
+            if not self._mcp_require_permission("execute_js"):
+                return {"ok": False, "error": "permission denied: execute_js"}
+            expression = str(arguments.get("expression", "")).strip()
+            if not expression:
+                return {"ok": False, "error": "missing expression"}
+            timeout = max(0.5, min(float(arguments.get("timeout", 5.0) or 5.0), 15.0))
+            return self._mcp_tool_evaluate_js(expression, timeout)
+        if name == "list_routes":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            return {
+                "ok": True,
+                "routes": list(self._all_routes),
+                "tab_bar_routes": list(self._navigator.tab_bar_pages if self._navigator else []),
+            }
+        if name == "get_current_route":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            return self._mcp_tool_get_current_route()
+        if name == "navigate_route":
+            if not self._mcp_require_permission("navigate_page"):
+                return {"ok": False, "error": "permission denied: navigate_page"}
+            route = str(arguments.get("route", "")).strip().lstrip("/")
+            if not route:
+                return {"ok": False, "error": "missing route"}
+            return self._mcp_tool_navigate_route(route)
+        return {"ok": False, "error": f"unknown tool: {name}"}
+
+    def _mcp_require_runtime(self):
+        """Return an error string when the debug runtime is not ready."""
+        if not self._engine or not self._navigator or not self._loop or not self._loop.is_running():
+            return "debug engine not started"
+        return ""
+
+    def _mcp_run_coro(self, coro, timeout):
+        """Run a coroutine on the debugger event loop from the MCP HTTP thread."""
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return fut.result(timeout=timeout)
+
+    def _mcp_tool_evaluate_js(self, expression, timeout):
+        """Execute JavaScript through DebugEngine.evaluate_js for MCP callers."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._engine.evaluate_js(expression, timeout=timeout), timeout + 1.0)
+            inner = result.get("result", {}).get("result", {}) if isinstance(result, dict) else {}
+            return {"ok": True, "value": inner.get("value"), "raw": result}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_get_current_route(self):
+        """Read the current miniapp route through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            route = self._mcp_run_coro(self._navigator.get_current_route(), 5.0)
+            return {"ok": True, "route": route}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_navigate_route(self, route):
+        """Navigate to a miniapp route through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            self._mcp_run_coro(self._navigator.navigate_to(route), 6.0)
+            return {"ok": True, "route": route}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     # ──────────────────────────────────
     #  业务
