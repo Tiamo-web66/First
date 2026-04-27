@@ -123,6 +123,65 @@ class MiniProgramNavigator:
         )
         return self._extract_value(result) or ""
 
+    async def start_capture(self):
+        """Enable request capture in the injected navigator hook."""
+        await self._ensure()
+        result = await self.engine.evaluate_js(
+            "JSON.stringify(window.nav.startCapture())", timeout=5.0
+        )
+        value = self._extract_value(result)
+        if value:
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"ok": False}
+
+    async def stop_capture(self):
+        """Disable request capture without uninstalling the wx hook."""
+        await self._ensure()
+        result = await self.engine.evaluate_js(
+            "JSON.stringify(window.nav.stopCapture())", timeout=5.0
+        )
+        value = self._extract_value(result)
+        if value:
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"ok": False}
+
+    async def get_recent_requests(self, limit=50):
+        """Return recent captured miniapp requests."""
+        await self._ensure()
+        limit = max(1, min(int(limit or 50), 200))
+        result = await self.engine.evaluate_js(
+            f"JSON.stringify(window.nav.getCapturedRequests({limit}))",
+            timeout=5.0,
+        )
+        value = self._extract_value(result)
+        if value:
+            try:
+                rows = json.loads(value)
+                return rows if isinstance(rows, list) else []
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return []
+
+    async def clear_captured_requests(self):
+        """Clear request capture records kept in the miniapp runtime."""
+        await self._ensure()
+        result = await self.engine.evaluate_js(
+            "JSON.stringify(window.nav.clearCapturedRequests())", timeout=5.0
+        )
+        value = self._extract_value(result)
+        if value:
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"ok": False}
+
     async def auto_visit(self, pages, delay=2.0, on_progress=None, cancel_event=None):
         """Visit pages sequentially using safe navigation."""
         total = len(pages)

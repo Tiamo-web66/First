@@ -40,6 +40,31 @@ BASIC_TOOLS = [
             "required": ["route"],
         },
     },
+    {
+        "name": "start_capture",
+        "description": "Start capturing miniapp wx.request/uploadFile/downloadFile traffic.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "stop_capture",
+        "description": "Stop request capture while keeping captured records available.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_recent_requests",
+        "description": "Read recent captured miniapp requests. Requires the read requests permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number", "description": "Maximum number of recent records to return, capped at 200."},
+            },
+        },
+    },
+    {
+        "name": "clear_requests",
+        "description": "Clear captured request records from the miniapp runtime.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -68,7 +93,7 @@ class McpRuntime:
             return False
 
     def list_tools(self):
-        """Return basic MCP tool metadata exposed by phase 4."""
+        """Return MCP tool metadata exposed by the GUI runtime."""
         return list(BASIC_TOOLS)
 
     def call_tool(self, name, arguments=None):

@@ -3232,6 +3232,26 @@ class App(QMainWindow):
             if not route:
                 return {"ok": False, "error": "missing route"}
             return self._mcp_tool_navigate_route(route)
+        if name == "start_capture":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_start_capture()
+        if name == "stop_capture":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_stop_capture()
+        if name == "get_recent_requests":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            try:
+                limit = int(arguments.get("limit", 50) or 50)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid limit"}
+            return self._mcp_tool_get_recent_requests(limit)
+        if name == "clear_requests":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_clear_requests()
         return {"ok": False, "error": f"unknown tool: {name}"}
 
     def _mcp_require_runtime(self):
@@ -3276,6 +3296,51 @@ class App(QMainWindow):
         try:
             self._mcp_run_coro(self._navigator.navigate_to(route), 6.0)
             return {"ok": True, "route": route}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_start_capture(self):
+        """Enable request capture through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._navigator.start_capture(), 6.0)
+            return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_stop_capture(self):
+        """Disable request capture through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._navigator.stop_capture(), 6.0)
+            return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_get_recent_requests(self, limit):
+        """Read recent captured request rows through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        limit = max(1, min(int(limit or 50), 200))
+        try:
+            rows = self._mcp_run_coro(self._navigator.get_recent_requests(limit), 6.0)
+            return {"ok": True, "requests": rows, "count": len(rows)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_clear_requests(self):
+        """Clear captured request rows through MiniProgramNavigator."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._navigator.clear_captured_requests(), 6.0)
+            return result if isinstance(result, dict) else {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

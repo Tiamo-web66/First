@@ -20,6 +20,14 @@
       this._customHeaders = {};
       this._redirectGuard = false;
       this._blockedRedirects = [];
+      this._capturedAPIs = [];
+      this._allCapturedAPIs = {};
+      this._globalAPIs = [];
+      this._globalAPISet = new Set();
+      this._captureEnabled = false;
+      this._capturedRequests = [];
+      this._captureSeq = 0;
+      this._requestCaptureLimit = 500;
       this.init();
     }
 
@@ -213,13 +221,29 @@
       }
     }
 
+    _safeClone(value) {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      try {
+        return JSON.parse(JSON.stringify(value));
+      } catch (e) {
+        try { return String(value); } catch (err) { return '[unserializable]'; }
+      }
+    }
+
+    _requestRoute() {
+      try { return this.current() || ''; } catch (e) { return ''; }
+    }
+
+    _pushCapturedRequest(record) {
+      this._capturedRequests.push(record);
+      var overflow = this._capturedRequests.length - this._requestCaptureLimit;
+      if (overflow > 0) this._capturedRequests.splice(0, overflow);
+    }
+
     _installHook() {
       if (this._hooked) return;
       this._hooked = true;
-      this._capturedAPIs = [];
-      this._allCapturedAPIs = {};
-      this._globalAPIs = [];
-      this._globalAPISet = new Set();
       var wx = this.wxFrame.wx;
       var self = this;
       var methods = ['request', 'uploadFile', 'downloadFile'];
@@ -228,6 +252,7 @@
         if (wx[method]) {
           self._originalMethods[method] = wx[method];
           wx[method] = function(options) {
+            options = options || {};
             var reqMethod = (options.method || (method === 'request' ? 'GET' : method)).toUpperCase();
             var url = options.url || '';
             var apiInfo = { url: url, method: reqMethod, timestamp: new Date().toLocaleTimeString(), type: method };
@@ -246,6 +271,54 @@
                 }
               }
             }
+            var record = null;
+            if (self._captureEnabled) {
+              record = {
+                id: ++self._captureSeq,
+                time: new Date().toISOString(),
+                route: self._requestRoute(),
+                type: method,
+                method: reqMethod,
+                url: url,
+                data: self._safeClone(options.data !== undefined ? options.data : options.formData),
+                header: self._safeClone(options.header || {}),
+                response: null,
+                status: 'pending',
+                stack: (new Error()).stack || ''
+              };
+              self._pushCapturedRequest(record);
+            }
+            var originalSuccess = options.success;
+            var originalFail = options.fail;
+            var originalComplete = options.complete;
+            options.success = function(res) {
+              if (record) {
+                record.status = 'success';
+                record.response = self._safeClone(res);
+                record.statusCode = res && res.statusCode;
+                record.endTime = new Date().toISOString();
+              }
+              if (typeof originalSuccess === 'function') return originalSuccess.apply(this, arguments);
+            };
+            options.fail = function(err) {
+              if (record) {
+                record.status = 'fail';
+                record.response = self._safeClone(err);
+                record.endTime = new Date().toISOString();
+              }
+              if (typeof originalFail === 'function') return originalFail.apply(this, arguments);
+            };
+            options.complete = function(res) {
+              if (record) {
+                if (record.status === 'pending') {
+                  record.status = 'complete';
+                  record.response = self._safeClone(res);
+                  record.statusCode = res && res.statusCode;
+                }
+                record.completeTime = new Date().toISOString();
+              }
+              if (typeof originalComplete === 'function') return originalComplete.apply(this, arguments);
+            };
             return self._originalMethods[method].call(wx, options);
           };
         }
@@ -277,6 +350,29 @@
 
     stopAutoVisit() {
       this._isAutoVisiting = false;
+    }
+
+    startCapture() {
+      this._installHook();
+      this._captureEnabled = true;
+      return {ok:true, enabled:true};
+    }
+
+    stopCapture() {
+      this._captureEnabled = false;
+      return {ok:true, enabled:false};
+    }
+
+    getCapturedRequests(limit) {
+      var rows = this._capturedRequests || [];
+      var n = parseInt(limit || 0, 10);
+      if (n > 0) return rows.slice(-n);
+      return rows.slice();
+    }
+
+    clearCapturedRequests() {
+      this._capturedRequests = [];
+      return {ok:true};
     }
 
     getAPIs() {
