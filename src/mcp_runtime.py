@@ -104,6 +104,43 @@ BASIC_TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "inspect_request_parameters",
+        "description": "Inspect captured request parameters and rank likely generated, signed, or encrypted fields. Requires the read requests permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "number", "description": "Captured request id. When omitted, the latest captured request is used."},
+                "limit": {"type": "number", "description": "How many recent requests to load while locating the request, capped at 200."},
+            },
+        },
+    },
+    {
+        "name": "trace_parameter_logic",
+        "description": "Search runtime source for a parameter name and optional sample value, returning nearby crypto/signature hints. Requires the read scripts permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "param_name": {"type": "string", "description": "Parameter name to trace, such as sign, token, or encryptedData."},
+                "sample_value": {"type": "string", "description": "Observed parameter value to search for literally when available."},
+                "max_scripts": {"type": "number", "description": "Maximum scripts to inspect, capped at 300."},
+                "max_results": {"type": "number", "description": "Maximum matches to return, capped at 100."},
+                "context_chars": {"type": "number", "description": "Characters of context around each match, capped at 500."},
+            },
+        },
+    },
+    {
+        "name": "find_crypto_candidates",
+        "description": "Scan runtime source for common signing, hashing, encoding, and encryption implementation hints. Requires the read scripts permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_scripts": {"type": "number", "description": "Maximum scripts to inspect, capped at 300."},
+                "max_results": {"type": "number", "description": "Maximum candidate snippets to return, capped at 100."},
+                "context_chars": {"type": "number", "description": "Characters of context around each candidate, capped at 500."},
+            },
+        },
+    },
 ]
 
 

@@ -7,10 +7,11 @@ import json
 import multiprocessing
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from PySide6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QRect,
@@ -3279,6 +3280,35 @@ class App(QMainWindow):
             context_chars = int(self._mcp_number_arg(arguments, "context_chars", 100, 0, 300))
             return self._mcp_tool_search_runtime_scripts(
                 query, case_sensitive, max_results, max_scripts, context_chars)
+        if name == "inspect_request_parameters":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            request_id = arguments.get("request_id")
+            try:
+                request_id = int(request_id) if request_id not in (None, "") else None
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid request_id"}
+            limit = int(self._mcp_number_arg(arguments, "limit", 50, 1, 200))
+            return self._mcp_tool_inspect_request_parameters(request_id, limit)
+        if name == "trace_parameter_logic":
+            if not self._mcp_require_permission("read_scripts"):
+                return {"ok": False, "error": "permission denied: read_scripts"}
+            param_name = str(arguments.get("param_name", "") or "").strip()
+            sample_value = str(arguments.get("sample_value", "") or "").strip()
+            if not param_name and not sample_value:
+                return {"ok": False, "error": "missing param_name or sample_value"}
+            max_scripts = int(self._mcp_number_arg(arguments, "max_scripts", 200, 1, 300))
+            max_results = int(self._mcp_number_arg(arguments, "max_results", 30, 1, 100))
+            context_chars = int(self._mcp_number_arg(arguments, "context_chars", 160, 40, 500))
+            return self._mcp_tool_trace_parameter_logic(
+                param_name, sample_value, max_scripts, max_results, context_chars)
+        if name == "find_crypto_candidates":
+            if not self._mcp_require_permission("read_scripts"):
+                return {"ok": False, "error": "permission denied: read_scripts"}
+            max_scripts = int(self._mcp_number_arg(arguments, "max_scripts", 200, 1, 300))
+            max_results = int(self._mcp_number_arg(arguments, "max_results", 40, 1, 100))
+            context_chars = int(self._mcp_number_arg(arguments, "context_chars", 180, 40, 500))
+            return self._mcp_tool_find_crypto_candidates(max_scripts, max_results, context_chars)
         return {"ok": False, "error": f"unknown tool: {name}"}
 
     def _mcp_require_runtime(self):
@@ -3376,6 +3406,153 @@ class App(QMainWindow):
         try:
             result = self._mcp_run_coro(self._navigator.clear_captured_requests(), 6.0)
             return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_preview_value(self, value, limit=180):
+        """Return a compact string preview for MCP analysis output."""
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+        else:
+            text = str(value)
+        return text if len(text) <= limit else text[:limit] + "..."
+
+    def _mcp_flatten_params(self, value, location, prefix="", depth=0, out=None):
+        """Flatten nested request data into parameter rows."""
+        out = out if out is not None else []
+        if len(out) >= 300 or depth > 5:
+            return out
+        if isinstance(value, dict):
+            for key, child in value.items():
+                path = f"{prefix}.{key}" if prefix else str(key)
+                self._mcp_flatten_params(child, location, path, depth + 1, out)
+            return out
+        if isinstance(value, list):
+            for index, child in enumerate(value[:50]):
+                path = f"{prefix}[{index}]" if prefix else f"[{index}]"
+                self._mcp_flatten_params(child, location, path, depth + 1, out)
+            return out
+        row = {
+            "name": prefix,
+            "path": prefix,
+            "location": location,
+            "value_type": type(value).__name__,
+            "value": self._mcp_preview_value(value),
+            "length": len(str(value)) if value is not None else 0,
+        }
+        score, reasons = self._mcp_parameter_score(prefix, value)
+        row["score"] = score
+        row["reasons"] = reasons
+        out.append(row)
+        return out
+
+    def _mcp_parameter_score(self, name, value):
+        """Score whether a parameter looks generated, signed, or encrypted."""
+        score = 0
+        reasons = []
+        lname = (name or "").lower()
+        value_text = "" if value is None else str(value)
+        name_hints = (
+            "sign", "signature", "token", "auth", "nonce", "timestamp", "ts",
+            "encrypt", "encrypted", "cipher", "secret", "key", "hash", "hmac",
+            "iv", "salt", "session", "ticket",
+        )
+        for hint in name_hints:
+            if hint in lname:
+                score += 3
+                reasons.append(f"name:{hint}")
+                break
+        if len(value_text) >= 24:
+            score += 1
+            reasons.append("long_value")
+        if re.fullmatch(r"[0-9a-fA-F]{24,}", value_text or ""):
+            score += 3
+            reasons.append("hex_like")
+        if re.fullmatch(r"[A-Za-z0-9+/=_-]{24,}", value_text or ""):
+            score += 2
+            reasons.append("base64_like")
+        if any(ch in value_text for ch in ("%", "+", "/", "=")) and len(value_text) >= 16:
+            score += 1
+            reasons.append("encoded_chars")
+        return score, reasons
+
+    def _mcp_crypto_terms(self):
+        """Common source terms that often appear near signing/encryption logic."""
+        return [
+            "CryptoJS", "crypto-js", "md5", "sha1", "sha256", "sha512", "hmac",
+            "HmacSHA", "AES", "DES", "RSA", "encrypt", "decrypt", "cipher",
+            "signature", "sign", "nonce", "timestamp", "token", "secret", "salt",
+            "iv", "btoa", "atob", "base64", "encodeURIComponent", "decodeURIComponent",
+            "JSON.stringify", "sort", "join", "URLSearchParams",
+        ]
+
+    def _mcp_crypto_hints(self, snippet):
+        """Return crypto/signature terms present in a snippet."""
+        lower = snippet.lower()
+        hints = []
+        for term in self._mcp_crypto_terms():
+            if term.lower() in lower and term not in hints:
+                hints.append(term)
+        return hints
+
+    def _mcp_extract_request_parameters(self, request):
+        """Extract query, header, body, and response fields from a captured request."""
+        params = []
+        url = request.get("url", "") or ""
+        try:
+            parsed = urlparse(url)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+                row = {
+                    "name": key,
+                    "path": key,
+                    "location": "query",
+                    "value_type": "str",
+                    "value": self._mcp_preview_value(value),
+                    "length": len(value),
+                }
+                score, reasons = self._mcp_parameter_score(key, value)
+                row["score"] = score
+                row["reasons"] = reasons
+                params.append(row)
+        except Exception:
+            pass
+        self._mcp_flatten_params(request.get("header") or {}, "header", out=params)
+        self._mcp_flatten_params(request.get("data") or {}, "data", out=params)
+        response = request.get("response")
+        if isinstance(response, dict):
+            body = response.get("data", response)
+            self._mcp_flatten_params(body, "response", out=params)
+        params.sort(key=lambda item: (-item.get("score", 0), item.get("location", ""), item.get("path", "")))
+        return params[:300]
+
+    def _mcp_tool_inspect_request_parameters(self, request_id, limit):
+        """Inspect captured request parameters and rank suspicious fields."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            rows = self._mcp_run_coro(self._navigator.get_recent_requests(limit), 6.0)
+            if not rows:
+                return {"ok": True, "request": None, "parameters": [], "count": 0}
+            if request_id is None:
+                request = rows[-1]
+            else:
+                request = next((row for row in rows if int(row.get("id", -1)) == request_id), None)
+                if not request:
+                    return {"ok": False, "error": f"request not found: {request_id}"}
+            params = self._mcp_extract_request_parameters(request)
+            summary = {
+                "id": request.get("id"),
+                "time": request.get("time"),
+                "route": request.get("route"),
+                "method": request.get("method"),
+                "url": request.get("url"),
+                "status": request.get("status"),
+                "statusCode": request.get("statusCode"),
+            }
+            return {"ok": True, "request": summary, "parameters": params, "count": len(params)}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -3485,6 +3662,126 @@ class App(QMainWindow):
             "matches": results,
         }
 
+    async def _mcp_trace_parameter_logic_async(
+            self, param_name, sample_value, max_scripts, max_results, context_chars):
+        """Locate source snippets related to a parameter name or observed value."""
+        scripts = await self._mcp_collect_runtime_scripts_async(1.2, max_scripts)
+        terms = []
+        if param_name:
+            terms.append({"kind": "param_name", "value": param_name})
+        if sample_value and len(sample_value) >= 4:
+            terms.append({"kind": "sample_value", "value": sample_value})
+        results = []
+        scanned = 0
+        errors = 0
+        seen = set()
+        for meta in scripts[:max_scripts]:
+            if len(results) >= max_results:
+                break
+            scanned += 1
+            script_id = meta.get("script_id", "")
+            try:
+                resp = await self._engine.send_cdp_command(
+                    "Debugger.getScriptSource", {"scriptId": script_id}, timeout=8.0)
+                source = resp.get("result", {}).get("scriptSource", "") if isinstance(resp, dict) else ""
+            except Exception:
+                errors += 1
+                continue
+            if not source:
+                continue
+            lower_source = source.lower()
+            for term in terms:
+                if len(results) >= max_results:
+                    break
+                needle = term["value"].lower()
+                pos = lower_source.find(needle)
+                step = max(1, len(needle))
+                while pos >= 0 and len(results) < max_results:
+                    bucket = (script_id, pos // 80, term["kind"])
+                    if bucket not in seen:
+                        seen.add(bucket)
+                        start = max(0, pos - context_chars)
+                        end = min(len(source), pos + len(term["value"]) + context_chars)
+                        snippet = source[start:end]
+                        hints = self._mcp_crypto_hints(snippet)
+                        score = len(hints) * 2 + (3 if term["kind"] == "param_name" else 1)
+                        results.append({
+                            "script_id": script_id,
+                            "url": meta.get("url", ""),
+                            "match_kind": term["kind"],
+                            "match": term["value"],
+                            "index": pos,
+                            "line": source.count("\n", 0, pos) + 1,
+                            "score": score,
+                            "crypto_hints": hints,
+                            "snippet": snippet,
+                            "source_length": len(source),
+                        })
+                    pos = lower_source.find(needle, pos + step)
+        results.sort(key=lambda item: (-item.get("score", 0), item.get("url", ""), item.get("line", 0)))
+        return {
+            "param_name": param_name,
+            "sample_value_used": bool(sample_value and len(sample_value) >= 4),
+            "scanned": scanned,
+            "errors": errors,
+            "matches": results[:max_results],
+        }
+
+    async def _mcp_find_crypto_candidates_async(self, max_scripts, max_results, context_chars):
+        """Find source snippets with dense crypto/signature hints."""
+        scripts = await self._mcp_collect_runtime_scripts_async(1.2, max_scripts)
+        terms = self._mcp_crypto_terms()
+        candidates = []
+        seen = set()
+        scanned = 0
+        errors = 0
+        for meta in scripts[:max_scripts]:
+            scanned += 1
+            script_id = meta.get("script_id", "")
+            try:
+                resp = await self._engine.send_cdp_command(
+                    "Debugger.getScriptSource", {"scriptId": script_id}, timeout=8.0)
+                source = resp.get("result", {}).get("scriptSource", "") if isinstance(resp, dict) else ""
+            except Exception:
+                errors += 1
+                continue
+            if not source:
+                continue
+            lower_source = source.lower()
+            for term in terms:
+                pos = lower_source.find(term.lower())
+                while pos >= 0:
+                    bucket = (script_id, pos // max(80, context_chars))
+                    if bucket not in seen:
+                        seen.add(bucket)
+                        start = max(0, pos - context_chars)
+                        end = min(len(source), pos + len(term) + context_chars)
+                        snippet = source[start:end]
+                        hints = self._mcp_crypto_hints(snippet)
+                        candidates.append({
+                            "script_id": script_id,
+                            "url": meta.get("url", ""),
+                            "index": pos,
+                            "line": source.count("\n", 0, pos) + 1,
+                            "score": len(hints),
+                            "crypto_hints": hints,
+                            "snippet": snippet,
+                            "source_length": len(source),
+                        })
+                    if len(candidates) >= max_results * 4:
+                        break
+                    pos = lower_source.find(term.lower(), pos + max(1, len(term)))
+                if len(candidates) >= max_results * 4:
+                    break
+            if len(candidates) >= max_results * 4:
+                break
+        candidates.sort(key=lambda item: (-item.get("score", 0), item.get("url", ""), item.get("line", 0)))
+        return {
+            "scanned": scanned,
+            "errors": errors,
+            "candidates": candidates[:max_results],
+        }
+
     def _mcp_tool_list_runtime_scripts(self, wait_seconds, limit):
         """List scripts parsed by the current miniapp runtime."""
         reason = self._mcp_require_runtime()
@@ -3533,6 +3830,36 @@ class App(QMainWindow):
             result = self._mcp_run_coro(
                 self._mcp_search_runtime_scripts_async(
                     query, case_sensitive, max_results, max_scripts, context_chars),
+                timeout)
+            return {"ok": True, **result}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_trace_parameter_logic(
+            self, param_name, sample_value, max_scripts, max_results, context_chars):
+        """Trace a request parameter to likely source-generation logic."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            timeout = max(15.0, min(90.0, 8.0 + max_scripts * 0.3))
+            result = self._mcp_run_coro(
+                self._mcp_trace_parameter_logic_async(
+                    param_name, sample_value, max_scripts, max_results, context_chars),
+                timeout)
+            return {"ok": True, **result}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_find_crypto_candidates(self, max_scripts, max_results, context_chars):
+        """Find likely crypto/signature helper snippets in runtime scripts."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            timeout = max(15.0, min(90.0, 8.0 + max_scripts * 0.3))
+            result = self._mcp_run_coro(
+                self._mcp_find_crypto_candidates_async(max_scripts, max_results, context_chars),
                 timeout)
             return {"ok": True, **result}
         except Exception as e:
