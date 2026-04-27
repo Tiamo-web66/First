@@ -10,6 +10,7 @@ import queue
 import subprocess
 import sys
 import threading
+from urllib.parse import urlparse
 
 from PySide6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QRect,
@@ -30,6 +31,8 @@ from src.logger import Logger
 from src.engine import DebugEngine
 from src.navigator import MiniProgramNavigator
 from src.cloud_audit import CloudAuditor
+from src.mcp_runtime import McpRuntime
+from src.mcp_server import McpHttpService
 
 # ══════════════════════════════════════════
 #  配色
@@ -686,9 +689,11 @@ class App(QMainWindow):
         self._mcp_endpoint = self._cfg.get("mcp_endpoint", "http://127.0.0.1:8765/mcp")
         self._mcp_appid = ""
         self._mcp_route = ""
+        self._mcp_service = None
         self._mcp_permissions = {k: default for k, _, default in _MCP_PERMISSIONS}
         self._mcp_permissions.update(self._cfg.get("mcp_permissions", {}))
         self._mcp_permission_toggles = {}
+        self._mcp_q = queue.Queue()
         self._log_q = queue.Queue()
         self._sts_q = queue.Queue()
         self._rte_q = queue.Queue()
@@ -1454,7 +1459,7 @@ class App(QMainWindow):
         ctrl_row.addWidget(self._btn_mcp_restart)
         ctrl_row.addStretch()
         ctrl_lay.addLayout(ctrl_row)
-        tip = QLabel("当前提供 MCP 控制台与权限管理；真实 MCP 服务会在后续阶段接入。")
+        tip = QLabel("当前提供本地 MCP HTTP 服务骨架；具体工具能力会在后续阶段接入。")
         tip.setWordWrap(True)
         tip.setProperty("class", "muted")
         ctrl_lay.addWidget(tip)
@@ -3035,6 +3040,7 @@ class App(QMainWindow):
         _save_cfg(data)
 
     def _mcp_client_config(self):
+        """Build the client-side MCP configuration shown in the GUI."""
         return json.dumps({
             "mcpServers": {
                 "first-debugger": {
@@ -3044,6 +3050,7 @@ class App(QMainWindow):
         }, indent=2, ensure_ascii=False)
 
     def _set_mcp_status(self, text, running):
+        """Update MCP status labels and service control button states."""
         self._mcp_running = running
         if not hasattr(self, "_mcp_status_lbl"):
             return
@@ -3056,6 +3063,7 @@ class App(QMainWindow):
         self._btn_mcp_restart.setEnabled(running)
 
     def _mcp_add_log(self, text):
+        """Append one MCP log line to the MCP page log box."""
         if not hasattr(self, "_mcp_logbox"):
             return
         self._mcp_logbox.append(text)
@@ -3063,15 +3071,18 @@ class App(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _set_mcp_permission(self, key, enabled):
+        """Persist a changed MCP permission and record the change in the log."""
         self._mcp_permissions[key] = bool(enabled)
         label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
         self._mcp_add_log(f"权限变更: {label} -> {'允许' if enabled else '禁止'}")
         self._auto_save()
 
     def _mcp_has_permission(self, key):
+        """Return whether a named MCP capability is enabled."""
         return bool(self._mcp_permissions.get(key, False))
 
     def _mcp_check_permission(self, key):
+        """Check a named MCP capability and log denied attempts."""
         allowed = self._mcp_has_permission(key)
         if not allowed:
             label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
@@ -3079,36 +3090,70 @@ class App(QMainWindow):
         return allowed
 
     def _clear_mcp_log(self):
+        """Clear the MCP page log box."""
         if hasattr(self, "_mcp_logbox"):
             self._mcp_logbox.clear()
 
     def _copy_mcp_address(self):
+        """Copy the configured MCP endpoint URL to the clipboard."""
         QApplication.clipboard().setText(self._mcp_endpoint)
         self._mcp_add_log(f"已复制 MCP 地址: {self._mcp_endpoint}")
         self._log_add("info", "[MCP] MCP 地址已复制到剪贴板")
 
     def _copy_mcp_config(self):
+        """Copy the external client configuration snippet to the clipboard."""
         cfg = self._mcp_client_config()
         QApplication.clipboard().setText(cfg)
         self._mcp_add_log("已复制 MCP 客户端配置")
         self._log_add("info", "[MCP] 客户端配置已复制到剪贴板")
 
     def _do_mcp_start(self):
-        self._set_mcp_status("界面占位（服务待接入）", True)
-        self._mcp_add_log("启动 MCP：当前仅更新界面状态，真实服务将在阶段 3 接入。")
-        self._log_add("info", "[MCP] MCP 控制台进入占位运行状态")
+        """Start the local MCP HTTP skeleton service from the GUI."""
+        if self._mcp_service and self._mcp_service.is_running:
+            return
+        try:
+            parsed = urlparse(self._mcp_endpoint)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 8765
+            path = parsed.path or "/mcp"
+            runtime = McpRuntime(
+                context_getter=self._mcp_context_snapshot,
+                permission_checker=self._mcp_has_permission,
+                log_callback=lambda msg: self._mcp_q.put(("log", msg)),
+            )
+            self._mcp_service = McpHttpService(runtime, host=host, port=port, path=path)
+            self._mcp_service.start()
+            self._set_mcp_status("运行中", True)
+            self._mcp_add_log(f"启动 MCP: {self._mcp_endpoint}")
+            self._log_add("info", f"[MCP] 服务已启动: {self._mcp_endpoint}")
+        except Exception as e:
+            self._mcp_service = None
+            self._set_mcp_status("异常", False)
+            self._mcp_add_log(f"启动失败: {e}")
+            self._log_add("error", f"[MCP] 启动失败: {e}")
 
     def _do_mcp_stop(self):
+        """Stop the local MCP HTTP skeleton service from the GUI."""
+        if self._mcp_service:
+            try:
+                self._mcp_service.stop()
+            except Exception as e:
+                self._mcp_add_log(f"停止异常: {e}")
+                self._log_add("error", f"[MCP] 停止异常: {e}")
+            finally:
+                self._mcp_service = None
         self._set_mcp_status("未启动", False)
-        self._mcp_add_log("停止 MCP：已恢复为未启动状态。")
+        self._mcp_add_log("停止 MCP：服务已停止。")
         self._log_add("info", "[MCP] MCP 控制台已停止")
 
     def _do_mcp_restart(self):
-        self._mcp_add_log("重启 MCP：当前为界面占位状态，未启动真实服务。")
-        self._set_mcp_status("界面占位（服务待接入）", True)
-        self._log_add("info", "[MCP] MCP 控制台已刷新占位状态")
+        """Restart the local MCP HTTP skeleton service."""
+        self._mcp_add_log("重启 MCP：正在重启本地服务。")
+        self._do_mcp_stop()
+        self._do_mcp_start()
 
     def _update_mcp_debug_status(self, sts=None):
+        """Refresh debugger status fields on the MCP page."""
         if not hasattr(self, "_mcp_frida_lbl"):
             return
         c = _TH[self._tn]
@@ -3124,6 +3169,20 @@ class App(QMainWindow):
             lbl.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
         self._mcp_app_lbl.setText(f"AppID: {self._mcp_appid or '--'}")
         self._mcp_route_lbl.setText(f"当前路由: /{self._mcp_route}" if self._mcp_route else "当前路由: --")
+
+    def _mcp_context_snapshot(self):
+        """Build a lightweight state snapshot returned by the MCP service."""
+        sts = self._engine.status if self._engine else {}
+        return {
+            "ok": True,
+            "debug_running": self._running,
+            "frida": bool(sts.get("frida", False)),
+            "miniapp": bool(sts.get("miniapp", False)),
+            "devtools": bool(sts.get("devtools", False)),
+            "appid": self._mcp_appid,
+            "route": self._mcp_route,
+            "permissions": dict(self._mcp_permissions),
+        }
 
     # ──────────────────────────────────
     #  业务
@@ -3889,6 +3948,18 @@ class App(QMainWindow):
             except queue.Empty:
                 break
             self._handle_ext(item)
+        for _ in range(50):
+            try:
+                item = self._mcp_q.get_nowait()
+            except queue.Empty:
+                break
+            self._handle_mcp(item)
+
+    def _handle_mcp(self, item):
+        """Apply MCP service events that were queued from background threads."""
+        kind = item[0]
+        if kind == "log":
+            self._mcp_add_log(item[1])
 
     def _apply_sts(self, sts):
         c = _TH[self._tn]
@@ -4173,6 +4244,12 @@ class App(QMainWindow):
     # ──────────────────────────────────
 
     def closeEvent(self, event):
+        if self._mcp_service:
+            try:
+                self._mcp_service.stop()
+            except Exception:
+                pass
+            self._mcp_service = None
         if self._ext_proc:
             try:
                 self._ext_proc.kill()  # 强制杀死子进程
