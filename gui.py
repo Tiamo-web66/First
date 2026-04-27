@@ -1460,7 +1460,7 @@ class App(QMainWindow):
         ctrl_row.addWidget(self._btn_mcp_restart)
         ctrl_row.addStretch()
         ctrl_lay.addLayout(ctrl_row)
-        tip = QLabel("当前提供本地 MCP HTTP 服务骨架；具体工具能力会在后续阶段接入。")
+        tip = QLabel("当前提供本地 MCP HTTP 服务，外部 AI 可按权限调用调试工具。")
         tip.setWordWrap(True)
         tip.setProperty("class", "muted")
         ctrl_lay.addWidget(tip)
@@ -1511,7 +1511,7 @@ class App(QMainWindow):
         lay.addWidget(log_card, 1)
 
         self._set_mcp_status("未启动", False)
-        self._mcp_add_log("MCP 页面已就绪，等待服务骨架接入。")
+        self._mcp_add_log("MCP 页面已就绪，等待外部客户端连接。")
 
         self._stack.addWidget(page)
         self._page_map["mcp"] = self._stack.count() - 1
@@ -3252,6 +3252,33 @@ class App(QMainWindow):
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
             return self._mcp_tool_clear_requests()
+        if name == "list_runtime_scripts":
+            if not self._mcp_require_permission("read_scripts"):
+                return {"ok": False, "error": "permission denied: read_scripts"}
+            wait_seconds = self._mcp_number_arg(arguments, "wait_seconds", 1.5, 0.2, 3.0)
+            limit = int(self._mcp_number_arg(arguments, "limit", 200, 1, 500))
+            return self._mcp_tool_list_runtime_scripts(wait_seconds, limit)
+        if name == "get_runtime_script_source":
+            if not self._mcp_require_permission("read_scripts"):
+                return {"ok": False, "error": "permission denied: read_scripts"}
+            script_id = str(arguments.get("script_id", "")).strip()
+            if not script_id:
+                return {"ok": False, "error": "missing script_id"}
+            offset = int(self._mcp_number_arg(arguments, "offset", 0, 0, 10000000))
+            max_chars = int(self._mcp_number_arg(arguments, "max_chars", 20000, 1, 100000))
+            return self._mcp_tool_get_runtime_script_source(script_id, offset, max_chars)
+        if name == "search_runtime_scripts":
+            if not self._mcp_require_permission("read_scripts"):
+                return {"ok": False, "error": "permission denied: read_scripts"}
+            query = str(arguments.get("query", "")).strip()
+            if not query:
+                return {"ok": False, "error": "missing query"}
+            case_sensitive = bool(arguments.get("case_sensitive", False))
+            max_results = int(self._mcp_number_arg(arguments, "max_results", 30, 1, 100))
+            max_scripts = int(self._mcp_number_arg(arguments, "max_scripts", 200, 1, 300))
+            context_chars = int(self._mcp_number_arg(arguments, "context_chars", 100, 0, 300))
+            return self._mcp_tool_search_runtime_scripts(
+                query, case_sensitive, max_results, max_scripts, context_chars)
         return {"ok": False, "error": f"unknown tool: {name}"}
 
     def _mcp_require_runtime(self):
@@ -3259,6 +3286,14 @@ class App(QMainWindow):
         if not self._engine or not self._navigator or not self._loop or not self._loop.is_running():
             return "debug engine not started"
         return ""
+
+    def _mcp_number_arg(self, arguments, key, default, min_value, max_value):
+        """Read a numeric MCP argument and clamp it to a bounded range."""
+        try:
+            value = float(arguments.get(key, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(float(min_value), min(value, float(max_value)))
 
     def _mcp_run_coro(self, coro, timeout):
         """Run a coroutine on the debugger event loop from the MCP HTTP thread."""
@@ -3341,6 +3376,165 @@ class App(QMainWindow):
         try:
             result = self._mcp_run_coro(self._navigator.clear_captured_requests(), 6.0)
             return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def _mcp_collect_runtime_scripts_async(self, wait_seconds=1.5, limit=200):
+        """Collect runtime script metadata from CDP Debugger.scriptParsed events."""
+        script_map = {}
+
+        def _on_parsed(data):
+            params = data.get("params", {}) if isinstance(data, dict) else {}
+            script_id = str(params.get("scriptId", "")).strip()
+            if not script_id:
+                return
+            script_map[script_id] = {
+                "script_id": script_id,
+                "url": params.get("url", "") or "",
+                "start_line": params.get("startLine", 0),
+                "start_column": params.get("startColumn", 0),
+                "end_line": params.get("endLine", 0),
+                "end_column": params.get("endColumn", 0),
+                "execution_context_id": params.get("executionContextId"),
+                "hash": params.get("hash", "") or "",
+            }
+
+        self._engine.on_cdp_event("Debugger.scriptParsed", _on_parsed)
+        try:
+            try:
+                await self._engine.send_cdp_command("Debugger.disable", timeout=3.0)
+                await asyncio.sleep(0.1)
+            except Exception:
+                pass
+            await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
+            try:
+                await self._engine.send_cdp_command(
+                    "Debugger.setSkipAllPauses", {"skip": True}, timeout=3.0)
+            except Exception:
+                pass
+            end_at = asyncio.get_event_loop().time() + wait_seconds
+            prev_count = -1
+            while asyncio.get_event_loop().time() < end_at:
+                await asyncio.sleep(0.2)
+                if len(script_map) == prev_count and prev_count > 0:
+                    break
+                prev_count = len(script_map)
+        finally:
+            self._engine.off_cdp_event("Debugger.scriptParsed", _on_parsed)
+
+        scripts = list(script_map.values())
+        scripts.sort(key=lambda item: (0 if item.get("url") else 1, item.get("url", ""), item.get("script_id", "")))
+        scripts = scripts[:limit]
+        self._mcp_runtime_scripts = {item["script_id"]: item for item in scripts}
+        return scripts
+
+    async def _mcp_get_runtime_script_source_async(self, script_id):
+        """Read one runtime script source by CDP scriptId."""
+        try:
+            await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
+            await self._engine.send_cdp_command(
+                "Debugger.setSkipAllPauses", {"skip": True}, timeout=3.0)
+        except Exception:
+            pass
+        resp = await self._engine.send_cdp_command(
+            "Debugger.getScriptSource", {"scriptId": script_id}, timeout=8.0)
+        return resp.get("result", {}).get("scriptSource", "") if isinstance(resp, dict) else ""
+
+    async def _mcp_search_runtime_scripts_async(
+            self, query, case_sensitive, max_results, max_scripts, context_chars):
+        """Search collected runtime script source for a literal query."""
+        scripts = await self._mcp_collect_runtime_scripts_async(1.2, max_scripts)
+        needle = query if case_sensitive else query.lower()
+        results = []
+        scanned = 0
+        errors = 0
+        for meta in scripts[:max_scripts]:
+            if len(results) >= max_results:
+                break
+            scanned += 1
+            script_id = meta.get("script_id", "")
+            try:
+                resp = await self._engine.send_cdp_command(
+                    "Debugger.getScriptSource", {"scriptId": script_id}, timeout=8.0)
+                source = resp.get("result", {}).get("scriptSource", "") if isinstance(resp, dict) else ""
+            except Exception:
+                errors += 1
+                continue
+            if not source:
+                continue
+            haystack = source if case_sensitive else source.lower()
+            pos = haystack.find(needle)
+            step = max(1, len(needle))
+            while pos >= 0 and len(results) < max_results:
+                start = max(0, pos - context_chars)
+                end = min(len(source), pos + len(query) + context_chars)
+                results.append({
+                    "script_id": script_id,
+                    "url": meta.get("url", ""),
+                    "index": pos,
+                    "line": source.count("\n", 0, pos) + 1,
+                    "snippet": source[start:end],
+                    "source_length": len(source),
+                })
+                pos = haystack.find(needle, pos + step)
+        return {
+            "query": query,
+            "case_sensitive": case_sensitive,
+            "scanned": scanned,
+            "errors": errors,
+            "matches": results,
+        }
+
+    def _mcp_tool_list_runtime_scripts(self, wait_seconds, limit):
+        """List scripts parsed by the current miniapp runtime."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            scripts = self._mcp_run_coro(
+                self._mcp_collect_runtime_scripts_async(wait_seconds, limit),
+                wait_seconds + 8.0)
+            return {"ok": True, "scripts": scripts, "count": len(scripts)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_get_runtime_script_source(self, script_id, offset, max_chars):
+        """Read a bounded source chunk for a runtime script."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            source = self._mcp_run_coro(
+                self._mcp_get_runtime_script_source_async(script_id), 12.0)
+            total = len(source)
+            end = min(total, offset + max_chars)
+            meta = getattr(self, "_mcp_runtime_scripts", {}).get(script_id, {})
+            return {
+                "ok": True,
+                "script_id": script_id,
+                "url": meta.get("url", ""),
+                "offset": offset,
+                "returned": max(0, end - offset),
+                "total": total,
+                "truncated": end < total,
+                "source": source[offset:end],
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_search_runtime_scripts(
+            self, query, case_sensitive, max_results, max_scripts, context_chars):
+        """Search runtime scripts and return bounded snippets."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            timeout = max(15.0, min(90.0, 8.0 + max_scripts * 0.3))
+            result = self._mcp_run_coro(
+                self._mcp_search_runtime_scripts_async(
+                    query, case_sensitive, max_results, max_scripts, context_chars),
+                timeout)
+            return {"ok": True, **result}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

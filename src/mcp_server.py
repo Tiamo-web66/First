@@ -79,7 +79,7 @@ class McpHttpService:
                     "ok": True,
                     "name": "first-debugger",
                     "transport": "http",
-                    "phase": 4,
+                    "phase": 6,
                     "path": service.path,
                     "status": service.runtime.get_context(),
                     "tools": [tool["name"] for tool in service.runtime.list_tools()],
