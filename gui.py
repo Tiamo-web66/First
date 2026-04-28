@@ -97,6 +97,23 @@ _MCP_PERMISSIONS = [
     ("call_cloud", "调用云函数", False),
     ("export_report", "导出报告", True),
 ]
+_MCP_TOOL_SUMMARIES = {
+    "get_status": "读取当前调试状态",
+    "evaluate_js": "执行小程序运行时 JS",
+    "list_routes": "列出已发现页面路由",
+    "get_current_route": "读取当前页面路由",
+    "navigate_route": "跳转到指定页面路由",
+    "start_capture": "开始捕获网络请求",
+    "stop_capture": "停止捕获网络请求",
+    "get_recent_requests": "读取最近捕获请求",
+    "clear_requests": "清空已捕获请求",
+    "list_runtime_scripts": "列出运行时脚本",
+    "get_runtime_script_source": "读取运行时脚本源码",
+    "search_runtime_scripts": "搜索运行时脚本源码",
+    "inspect_request_parameters": "分析请求参数特征",
+    "trace_parameter_logic": "追踪参数生成逻辑",
+    "find_crypto_candidates": "查找加密签名代码线索",
+}
 
 # ══════════════════════════════════════════
 #  配置持久化
@@ -4377,20 +4394,23 @@ class App(QMainWindow):
         """Return whether a named MCP capability is enabled."""
         return bool(self._mcp_permissions.get(key, False))
 
+    def _mcp_permission_log_name(self, key):
+        """格式化 MCP 权限名，并附带中文作用说明供日志展示。"""
+        label = next((name for name_key, name, _ in _MCP_PERMISSIONS if name_key == key), "")
+        return f"{key}（{label}）" if label else str(key)
+
     def _mcp_check_permission(self, key):
         """Check a named MCP capability and log denied attempts."""
         allowed = self._mcp_has_permission(key)
         if not allowed:
-            label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
-            self._mcp_add_log(f"权限拒绝: {label}")
+            self._mcp_add_log(f"权限拒绝: {self._mcp_permission_log_name(key)}")
         return allowed
 
     def _mcp_require_permission(self, key):
         """Thread-safe permission check used by MCP tool handlers."""
         allowed = self._mcp_has_permission(key)
         if not allowed:
-            label = next((name for k, name, _ in _MCP_PERMISSIONS if k == key), key)
-            self._mcp_q.put(("log", f"权限拒绝: {label}"))
+            self._mcp_q.put(("log", f"权限拒绝: {self._mcp_permission_log_name(key)}"))
         return allowed
 
     def _clear_mcp_log(self):
@@ -4504,9 +4524,14 @@ class App(QMainWindow):
             "permissions": dict(self._mcp_permissions),
         }
 
+    def _mcp_tool_log_name(self, name):
+        """格式化 MCP 工具名，并附带中文作用说明供日志展示。"""
+        summary = _MCP_TOOL_SUMMARIES.get(name, "")
+        return f"{name}（{summary}）" if summary else str(name)
+
     def _mcp_call_tool(self, name, arguments):
         """Handle basic MCP tools from the HTTP service thread."""
-        self._mcp_q.put(("log", f"调用工具: {name}"))
+        self._mcp_q.put(("log", f"调用工具: {self._mcp_tool_log_name(name)}"))
         if name == "get_status":
             if not self._mcp_require_permission("read_status"):
                 return {"ok": False, "error": "permission denied: read_status"}
