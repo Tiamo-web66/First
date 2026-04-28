@@ -1825,8 +1825,21 @@ class App(QMainWindow):
         list_lay.setContentsMargins(16, 12, 16, 12)
         list_lay.setSpacing(8)
 
+        list_header = QHBoxLayout()
+        list_header.setSpacing(8)
+        list_header.addWidget(_make_label("小程序列表", bold=True))
+        self._ext_app_count_lbl = _make_label("0 个", muted=True)
+        list_header.addWidget(self._ext_app_count_lbl)
+        self._ext_app_search_ent = _make_entry("搜索 AppID / 名称...", width=220)
+        self._ext_app_search_ent.textChanged.connect(self._ext_filter_app_rows)
+        list_header.addWidget(self._ext_app_search_ent)
+        list_header.addStretch()
+        self._btn_ext_copy_apps = _make_btn("复制当前", self._ext_copy_visible_apps)
+        self._btn_ext_copy_apps.setEnabled(False)
+        list_header.addWidget(self._btn_ext_copy_apps)
+        list_lay.addLayout(list_header)
+
         # 表头
-        list_lay.addWidget(_make_label("小程序列表", bold=True))
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
         hdr_appid = _make_label("AppID", bold=True)
@@ -1844,6 +1857,12 @@ class App(QMainWindow):
         sep.setFixedHeight(1)
         sep.setStyleSheet("background: rgba(128,128,128,0.2);")
         list_lay.addWidget(sep)
+
+        self._ext_app_empty_hint = QLabel("没有匹配的小程序。")
+        self._ext_app_empty_hint.setProperty("class", "muted")
+        self._ext_app_empty_hint.setAlignment(Qt.AlignCenter)
+        self._ext_app_empty_hint.hide()
+        list_lay.addWidget(self._ext_app_empty_hint)
 
         # 滚动区域
         scroll = QScrollArea()
@@ -1979,7 +1998,22 @@ class App(QMainWindow):
         view_result_lay = QVBoxLayout(view_result_card)
         view_result_lay.setContentsMargins(16, 12, 16, 12)
         view_result_lay.setSpacing(8)
-        view_result_lay.addWidget(_make_label("扫描结果", bold=True))
+        result_hdr = QHBoxLayout()
+        result_hdr.setSpacing(8)
+        result_hdr.addWidget(_make_label("扫描结果", bold=True))
+        self._ext_result_count_lbl = _make_label("0 条", muted=True)
+        result_hdr.addWidget(self._ext_result_count_lbl)
+        self._ext_result_search_ent = _make_entry("搜索分类或结果内容...", width=240)
+        self._ext_result_search_ent.textChanged.connect(self._ext_filter_result_widgets)
+        result_hdr.addWidget(self._ext_result_search_ent)
+        result_hdr.addStretch()
+        self._btn_ext_copy_visible_results = _make_btn("复制当前", self._ext_copy_visible_results)
+        self._btn_ext_copy_visible_results.setEnabled(False)
+        result_hdr.addWidget(self._btn_ext_copy_visible_results)
+        self._btn_ext_clear_result_search = _make_btn("清除搜索", self._ext_clear_result_search)
+        self._btn_ext_clear_result_search.setEnabled(False)
+        result_hdr.addWidget(self._btn_ext_clear_result_search)
+        view_result_lay.addLayout(result_hdr)
         self._ext_view_scroll = QScrollArea()
         self._ext_view_scroll.setWidgetResizable(True)
         self._ext_view_scroll.setStyleSheet("QScrollArea { border: none; }")
@@ -2134,13 +2168,8 @@ class App(QMainWindow):
 
         return f"{len(pkgs)} pkg"
 
-    def _ext_refresh_apps(self):
-        """刷新小程序列表"""
-        pkg_dir = self._ext_path_ent.text().strip()
-        if not pkg_dir or not os.path.isdir(pkg_dir):
-            return
-
-        # 清除旧列表
+    def _ext_clear_app_rows(self):
+        """清空敏感信息提取页的小程序行，并重置行缓存。"""
         while self._ext_list_layout.count() > 1:  # 保留 stretch
             item = self._ext_list_layout.takeAt(0)
             w = item.widget()
@@ -2148,11 +2177,34 @@ class App(QMainWindow):
                 w.deleteLater()
         self._ext_app_widgets.clear()
 
+    def _ext_refresh_apps(self):
+        """刷新小程序列表，并在目录无效或无结果时同步更新空状态。"""
+        pkg_dir = self._ext_path_ent.text().strip()
+        self._ext_clear_app_rows()
+        if not pkg_dir or not os.path.isdir(pkg_dir):
+            self._ext_status_lbl.setText("请选择有效的 Applet 目录")
+            if hasattr(self, "_ext_app_count_lbl"):
+                self._ext_app_count_lbl.setText("0 个")
+            if hasattr(self, "_btn_ext_copy_apps"):
+                self._btn_ext_copy_apps.setEnabled(False)
+            if hasattr(self, "_ext_app_empty_hint"):
+                self._ext_app_empty_hint.setText("请选择有效的 Applet 目录。")
+                self._ext_app_empty_hint.show()
+            return
+
         # 扫描目录
         try:
             from src.wxapkg import find_wxapkg_files
             all_pkgs = find_wxapkg_files(pkg_dir)
         except Exception as e:
+            self._ext_status_lbl.setText("扫描目录失败")
+            if hasattr(self, "_ext_app_count_lbl"):
+                self._ext_app_count_lbl.setText("0 个")
+            if hasattr(self, "_btn_ext_copy_apps"):
+                self._btn_ext_copy_apps.setEnabled(False)
+            if hasattr(self, "_ext_app_empty_hint"):
+                self._ext_app_empty_hint.setText("扫描目录失败，请查看处理日志。")
+                self._ext_app_empty_hint.show()
             self._ext_log(f"扫描目录失败: {e}")
             return
 
@@ -2163,6 +2215,13 @@ class App(QMainWindow):
 
         if not appid_groups:
             self._ext_status_lbl.setText("未找到小程序")
+            if hasattr(self, "_ext_app_count_lbl"):
+                self._ext_app_count_lbl.setText("0 个")
+            if hasattr(self, "_btn_ext_copy_apps"):
+                self._btn_ext_copy_apps.setEnabled(False)
+            if hasattr(self, "_ext_app_empty_hint"):
+                self._ext_app_empty_hint.setText("未找到小程序。")
+                self._ext_app_empty_hint.show()
             return
 
         c = _TH[self._tn]
@@ -2251,7 +2310,7 @@ class App(QMainWindow):
             self._ext_app_widgets[appid] = {
                 "row": row, "btn_dec": btn_dec, "btn_scan": btn_scan,
                 "btn_view": btn_view, "btn_more": btn_more, "btn_del": btn_del,
-                "lbl_name": lbl_name,
+                "lbl_name": lbl_name, "name": app_name,
             }
 
             # 插入在最前面（最新的在上面）
@@ -2260,6 +2319,7 @@ class App(QMainWindow):
         self._ext_status_lbl.setText(f"发现 {len(appid_groups)} 个小程序")
         # 记录当前已知 appid 集合 (供目录监控用)
         self._ext_last_appids = set(appid_groups.keys())
+        self._ext_filter_app_rows()
 
     def _ext_update_app_buttons(self, appid):
         """更新指定 app 的按钮状态"""
@@ -2280,6 +2340,50 @@ class App(QMainWindow):
 
         widgets["btn_scan"].setEnabled(is_dec)
         widgets["btn_view"].setEnabled(is_scanned)
+
+    def _ext_visible_appids(self):
+        """返回当前小程序列表中可见的小程序 AppID。"""
+        visible = []
+        for appid, widgets in self._ext_app_widgets.items():
+            row = widgets.get("row")
+            if row and row.isVisible():
+                visible.append(appid)
+        return visible
+
+    def _ext_filter_app_rows(self):
+        """按 AppID 或显示名称过滤敏感信息提取的小程序列表。"""
+        kw = self._ext_app_search_ent.text().strip().lower() if hasattr(self, "_ext_app_search_ent") else ""
+        visible = 0
+        total = len(self._ext_app_widgets)
+        for appid, widgets in self._ext_app_widgets.items():
+            name = str(widgets.get("name", ""))
+            matched = not kw or kw in appid.lower() or kw in name.lower()
+            row = widgets.get("row")
+            if row:
+                row.setVisible(matched)
+            if matched:
+                visible += 1
+        if total:
+            self._ext_status_lbl.setText(f"显示 {visible} / {total} 个小程序" if kw else f"发现 {total} 个小程序")
+        if hasattr(self, "_ext_app_count_lbl"):
+            self._ext_app_count_lbl.setText(f"{visible} / {total}" if kw else f"{total} 个")
+        if hasattr(self, "_btn_ext_copy_apps"):
+            self._btn_ext_copy_apps.setEnabled(visible > 0)
+        if hasattr(self, "_ext_app_empty_hint"):
+            self._ext_app_empty_hint.setText("没有匹配的小程序。" if kw else "未找到小程序。")
+            self._ext_app_empty_hint.setVisible(visible == 0)
+
+    def _ext_copy_visible_apps(self):
+        """复制当前可见小程序列表的 AppID 和名称。"""
+        rows = []
+        for appid in self._ext_visible_appids():
+            widgets = self._ext_app_widgets.get(appid, {})
+            rows.append(f"{appid}\t{widgets.get('name', '')}")
+        if not rows:
+            self._ext_log("当前没有可复制的小程序")
+            return
+        QApplication.clipboard().setText("\n".join(rows))
+        self._ext_log(f"已复制 {len(rows)} 个小程序")
 
     def _ext_copy_appid(self, appid):
         """复制小程序 AppID 到剪贴板，并写入处理日志。"""
@@ -2430,7 +2534,7 @@ class App(QMainWindow):
                 except json.JSONDecodeError:
                     self._ext_q.put({"type": "log", "msg": line})
         except Exception as e:
-            self._rte_q.put(("__vc_detect_failed__", str(e)))
+            self._ext_q.put({"type": "log", "msg": f"读取子进程输出失败: {e}"})
         finally:
             proc.wait()
             stderr_out = ""
@@ -2461,6 +2565,11 @@ class App(QMainWindow):
         self._ext_current_html = html_path
         self._ext_current_json = json_path
         self._ext_view_title.setText(f"查看敏感信息 - {appid}")
+        if hasattr(self, "_ext_result_search_ent"):
+            self._ext_result_search_ent.blockSignals(True)
+            self._ext_result_search_ent.clear()
+            self._ext_result_search_ent.blockSignals(False)
+        self._ext_result_widgets = []
 
         # 清除旧内容
         layout = self._ext_view_top_layout
@@ -2480,7 +2589,7 @@ class App(QMainWindow):
 
         # 加载 JSON 数据
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
         except Exception as e:
             self._ext_log(f"加载结果失败: {e}")
@@ -2535,6 +2644,8 @@ class App(QMainWindow):
         def _build_cat_widget(key, label, items):
             """构建单个分类的 widget — 支持展开/折叠"""
             w = QWidget()
+            w.setProperty("result_label", label)
+            w.setProperty("result_text", "\n".join(str(i) for i in items))
             lay = QVBoxLayout(w)
             lay.setContentsMargins(0, 8, 0, 4)
             lay.setSpacing(2)
@@ -2570,6 +2681,9 @@ class App(QMainWindow):
                 f"QPushButton:hover {{ background: {accent}; color: #111; }}")
             copy_text = "\n".join(str(i) for i in items)
             btn_copy.clicked.connect(lambda _, t=copy_text, b=btn_copy: self._ext_copy_cat(t, b))
+            btn_copy.setEnabled(bool(items))
+            if not items:
+                btn_copy.setToolTip("当前分类没有可复制的结果")
             title_row.addWidget(btn_copy)
             lay.addLayout(title_row)
 
@@ -2600,6 +2714,7 @@ class App(QMainWindow):
                 btn_fold.setText("▶" if visible else "▼")
 
             btn_fold.clicked.connect(toggle_fold)
+            self._ext_result_widgets.append((w, label, [str(i) for i in items]))
 
             return w
 
@@ -2644,7 +2759,13 @@ class App(QMainWindow):
         cols_layout.addWidget(right_col, 1)
 
         layout.addWidget(cols_widget)
+        self._ext_result_empty_hint = QLabel("没有匹配的扫描结果。")
+        self._ext_result_empty_hint.setProperty("class", "muted")
+        self._ext_result_empty_hint.setAlignment(Qt.AlignCenter)
+        self._ext_result_empty_hint.hide()
+        layout.addWidget(self._ext_result_empty_hint)
         layout.addStretch()
+        self._ext_filter_result_widgets()
 
         # 切换到查看页
         self._ext_stack.setCurrentIndex(2)
@@ -2655,6 +2776,52 @@ class App(QMainWindow):
         old = btn.text()
         btn.setText("✓")
         QTimer.singleShot(1200, lambda: btn.setText(old))
+
+    def _ext_filter_result_widgets(self):
+        """按关键字过滤敏感信息结果分类。"""
+        kw = self._ext_result_search_ent.text().strip().lower() if hasattr(self, "_ext_result_search_ent") else ""
+        visible = 0
+        visible_items = 0
+        total_items = 0
+        for widget, label, items in getattr(self, "_ext_result_widgets", []):
+            text = "\n".join(items).lower()
+            matched = not kw or kw in label.lower() or kw in text
+            widget.setVisible(matched)
+            total_items += len(items)
+            if matched:
+                visible += 1
+                visible_items += len(items)
+        total = len(getattr(self, "_ext_result_widgets", []))
+        if hasattr(self, "_ext_result_count_lbl"):
+            if kw:
+                self._ext_result_count_lbl.setText(f"{visible} / {total} 类，{visible_items} 条")
+            else:
+                self._ext_result_count_lbl.setText(f"{total} 类，{total_items} 条")
+        if hasattr(self, "_btn_ext_copy_visible_results"):
+            self._btn_ext_copy_visible_results.setEnabled(visible_items > 0)
+        if hasattr(self, "_btn_ext_clear_result_search"):
+            self._btn_ext_clear_result_search.setEnabled(bool(kw))
+        if hasattr(self, "_ext_result_empty_hint"):
+            self._ext_result_empty_hint.setVisible(visible == 0)
+
+    def _ext_clear_result_search(self):
+        """清空敏感信息结果页搜索条件。"""
+        if hasattr(self, "_ext_result_search_ent"):
+            self._ext_result_search_ent.clear()
+        self._ext_filter_result_widgets()
+
+    def _ext_copy_visible_results(self):
+        """复制当前可见的敏感信息结果分类内容。"""
+        chunks = []
+        for widget, label, items in getattr(self, "_ext_result_widgets", []):
+            if not widget.isVisible() or not items:
+                continue
+            chunks.append(f"[{label}]\n" + "\n".join(items))
+        if not chunks:
+            self._ext_log("当前没有可复制的扫描结果")
+            return
+        QApplication.clipboard().setText("\n\n".join(chunks))
+        self._ext_log(f"已复制 {len(chunks)} 个分类的扫描结果")
 
     def _ext_open_html(self):
         """浏览器打开 HTML 报告"""
@@ -3343,9 +3510,22 @@ class App(QMainWindow):
         intro.setProperty("class", "muted")
         intro.setWordWrap(True)
         intro_lay.addWidget(intro)
+        faq_tools = QHBoxLayout()
+        faq_tools.setSpacing(8)
+        faq_tools.addWidget(QLabel("搜索"))
+        self._faq_count_lbl = _make_label("0 / 0", muted=True)
+        faq_tools.addWidget(self._faq_count_lbl)
+        self._faq_search_ent = _make_entry("输入问题或解决方案关键字...")
+        self._faq_search_ent.textChanged.connect(self._filter_faq_items)
+        faq_tools.addWidget(self._faq_search_ent, 1)
+        self._btn_faq_copy_all = _make_btn("复制全部", self._copy_all_faq)
+        faq_tools.addWidget(self._btn_faq_copy_all)
+        self._btn_faq_clear_search = _make_btn("清除搜索", self._clear_faq_search)
+        faq_tools.addWidget(self._btn_faq_clear_search)
+        intro_lay.addLayout(faq_tools)
         lay.addWidget(intro_card)
 
-        faq_items = [
+        self._faq_items = [
             ("Frida 连接失败", "请确认当前版本是否在 WMPF 版本区间内，如无法解决建议安装推荐版本。"),
             ("DevTools 打开内容为空", "点击启动调试前请勿打开小程序；启动调试后再次打开小程序即可。"),
             (
@@ -3362,7 +3542,8 @@ class App(QMainWindow):
         inner_lay.setContentsMargins(0, 0, 0, 0)
         inner_lay.setSpacing(10)
 
-        for idx, (title, solution) in enumerate(faq_items, start=1):
+        self._faq_cards = []
+        for idx, (title, solution) in enumerate(self._faq_items, start=1):
             card = _make_card()
             card_lay = QVBoxLayout(card)
             card_lay.setContentsMargins(16, 12, 16, 12)
@@ -3374,6 +3555,8 @@ class App(QMainWindow):
             head.addWidget(num)
             head.addWidget(_make_label(title, bold=True))
             head.addStretch()
+            btn_copy = _make_btn("复制", lambda checked=False, t=title, s=solution: self._copy_faq_item(t, s))
+            head.addWidget(btn_copy)
             card_lay.addLayout(head)
             content = QLabel(solution)
             content.setProperty("class", "muted")
@@ -3381,12 +3564,62 @@ class App(QMainWindow):
             content.setTextInteractionFlags(Qt.TextSelectableByMouse)
             card_lay.addWidget(content)
             inner_lay.addWidget(card)
+            self._faq_cards.append((card, title, solution))
 
+        self._faq_empty_hint = QLabel("没有匹配的常见问题。")
+        self._faq_empty_hint.setProperty("class", "muted")
+        self._faq_empty_hint.setAlignment(Qt.AlignCenter)
+        self._faq_empty_hint.hide()
+        inner_lay.addWidget(self._faq_empty_hint)
         inner_lay.addStretch()
         scroll.setWidget(inner)
         lay.addWidget(scroll, 1)
+        self._filter_faq_items()
         self._stack.addWidget(page)
         self._page_map["faq"] = self._stack.count() - 1
+
+    def _filter_faq_items(self):
+        """按关键字过滤常见问题卡片，并在无结果时显示空状态。"""
+        kw = self._faq_search_ent.text().strip().lower() if hasattr(self, "_faq_search_ent") else ""
+        visible = 0
+        cards = getattr(self, "_faq_cards", [])
+        for card, title, solution in cards:
+            matched = not kw or kw in title.lower() or kw in solution.lower()
+            card.setVisible(matched)
+            if matched:
+                visible += 1
+        total = len(cards)
+        if hasattr(self, "_faq_count_lbl"):
+            self._faq_count_lbl.setText(f"{visible} / {total}" if kw else f"{total} 条")
+        if hasattr(self, "_btn_faq_copy_all"):
+            self._btn_faq_copy_all.setEnabled(visible > 0)
+        if hasattr(self, "_btn_faq_clear_search"):
+            self._btn_faq_clear_search.setEnabled(bool(kw))
+        if hasattr(self, "_faq_empty_hint"):
+            self._faq_empty_hint.setVisible(visible == 0)
+
+    def _clear_faq_search(self):
+        """清空常见问题搜索关键字并恢复全部条目。"""
+        if hasattr(self, "_faq_search_ent"):
+            self._faq_search_ent.clear()
+        self._filter_faq_items()
+
+    def _copy_faq_item(self, title, solution):
+        """复制单条常见问题及其解决方案。"""
+        QApplication.clipboard().setText(f"{title}\n{solution}")
+        self._log_add("info", f"[FAQ] 已复制: {title}")
+
+    def _copy_all_faq(self):
+        """复制当前匹配的常见问题列表。"""
+        items = []
+        for card, title, solution in getattr(self, "_faq_cards", []):
+            if card.isVisible():
+                items.append(f"{title}\n{solution}")
+        if not items:
+            self._log_add("warn", "[FAQ] 当前没有可复制的问题")
+            return
+        QApplication.clipboard().setText("\n\n".join(items))
+        self._log_add("info", f"[FAQ] 已复制 {len(items)} 条常见问题")
 
     # ──────────────────────────────────
     #  页面切换
