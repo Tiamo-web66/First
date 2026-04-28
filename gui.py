@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QIcon, QPixmap, QDesktopServices, QFontDatabase,
+    QPen,
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -745,6 +746,134 @@ class ThemeIcon(QWidget):
             p.drawEllipse(8, 1, 10, 13)
 
 
+class MenuIcon(QWidget):
+    """绘制侧栏菜单图标，避免使用字体缩写造成风格不统一。"""
+
+    def __init__(self, kind, theme="dark", parent=None):
+        """初始化指定菜单类型的图标块。"""
+        super().__init__(parent)
+        self._kind = kind
+        self._theme = theme
+        self._active = False
+        self.setFixedSize(22, 22)
+
+    def set_state(self, active, theme):
+        """更新菜单图标的激活状态和主题颜色。"""
+        self._active = bool(active)
+        self._theme = theme
+        self.update()
+
+    def paintEvent(self, e):
+        """绘制菜单图标底色和简化线性符号。"""
+        c = _TH.get(self._theme, _D)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        bg = QColor(c["accent"] if self._active else c["input"])
+        fg = QColor("#ffffff" if self._active else c["text3"])
+        p.setPen(Qt.NoPen)
+        p.setBrush(bg)
+        p.drawRoundedRect(0, 0, 22, 22, 7, 7)
+        pen = QPen(fg, 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        k = self._kind
+        if k == "control":
+            p.drawRoundedRect(6, 6, 10, 10, 2, 2)
+            p.drawLine(11, 3, 11, 6)
+            p.drawLine(11, 16, 11, 19)
+            p.drawLine(3, 11, 6, 11)
+            p.drawLine(16, 11, 19, 11)
+        elif k == "navigator":
+            p.drawLine(6, 16, 10, 6)
+            p.drawLine(10, 6, 16, 16)
+            p.drawLine(8, 12, 14, 12)
+        elif k == "hook":
+            p.drawLine(7, 5, 7, 17)
+            p.drawLine(15, 5, 15, 17)
+            p.drawLine(7, 11, 15, 11)
+        elif k == "cloud":
+            p.drawArc(5, 8, 7, 7, 30 * 16, 210 * 16)
+            p.drawArc(9, 6, 7, 8, 20 * 16, 210 * 16)
+            p.drawLine(6, 15, 16, 15)
+        elif k == "mcp":
+            p.drawRoundedRect(5, 5, 5, 5, 1, 1)
+            p.drawRoundedRect(12, 5, 5, 5, 1, 1)
+            p.drawRoundedRect(8, 13, 6, 5, 1, 1)
+            p.drawLine(10, 10, 11, 13)
+            p.drawLine(14, 10, 12, 13)
+        elif k == "extract":
+            p.drawEllipse(6, 5, 10, 10)
+            p.drawLine(13, 13, 17, 17)
+            p.drawLine(8, 10, 14, 10)
+        elif k == "vconsole":
+            p.drawRoundedRect(5, 5, 12, 12, 2, 2)
+            p.drawLine(8, 9, 11, 12)
+            p.drawLine(11, 12, 15, 8)
+        elif k == "logs":
+            for y in (7, 11, 15):
+                p.drawLine(6, y, 16, y)
+        else:
+            p.drawEllipse(7, 5, 8, 8)
+            p.drawPoint(11, 17)
+
+
+class WindowButton(QWidget):
+    """绘制右上角窗口控制按钮。"""
+
+    clicked = Signal()
+
+    def __init__(self, role, theme="dark", parent=None):
+        """初始化最小化、最大化或关闭按钮。"""
+        super().__init__(parent)
+        self._role = role
+        self._theme = theme
+        self._hover = False
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_theme(self, theme):
+        """切换窗口按钮主题色。"""
+        self._theme = theme
+        self.update()
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, e):
+        """绘制圆形按钮和内部符号。"""
+        c = _TH.get(self._theme, _D)
+        if self._role == "close":
+            fill = QColor("#ff5f57" if self._hover else c["input"])
+            mark = QColor("#ffffff" if self._hover else c["text3"])
+        else:
+            fill = QColor(c["sb_hover"] if self._hover else c["input"])
+            mark = QColor(c["text2"])
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(c["border"]), 1))
+        p.setBrush(fill)
+        p.drawEllipse(1, 1, 16, 16)
+        p.setPen(QPen(mark, 1.4))
+        if self._role == "min":
+            p.drawLine(6, 10, 12, 10)
+        elif self._role == "max":
+            p.drawRect(6, 6, 6, 6)
+        else:
+            p.drawLine(6, 6, 12, 12)
+            p.drawLine(12, 6, 6, 12)
+
+
 # ══════════════════════════════════════════
 #  辅助函数
 # ══════════════════════════════════════════
@@ -792,6 +921,7 @@ class App(QMainWindow):
         _install_app_font()
         self._os_tag = "macOS" if sys.platform == "darwin" else "Windows"
         self.setWindowTitle(f"First-{self._os_tag}")
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         _ico = os.path.join(_BASE_DIR, "icon.png")
         if os.path.exists(_ico):
             self.setWindowIcon(QIcon(_ico))
@@ -808,6 +938,7 @@ class App(QMainWindow):
         self._cloud_row_results = {}
         self._cloud_result_by_vals = {}
         self._last_sts = {}
+        self._drag_pos = None
         self._cancel_ev = None
         self._route_poll_id = None
         self._all_routes = []
@@ -876,10 +1007,13 @@ class App(QMainWindow):
         hdr_wrap_lay = QVBoxLayout(hdr_wrap)
         hdr_wrap_lay.setContentsMargins(12, 10, 12, 8)
         hdr_wrap_lay.setSpacing(0)
-        hdr_frame = QFrame()
-        hdr_frame.setObjectName("top_bar")
-        hdr_frame.setFixedHeight(48)
-        hdr_lay = QHBoxLayout(hdr_frame)
+        self._hdr_frame = QFrame()
+        self._hdr_frame.setObjectName("top_bar")
+        self._hdr_frame.setFixedHeight(48)
+        self._hdr_frame.mousePressEvent = self._header_mouse_press
+        self._hdr_frame.mouseMoveEvent = self._header_mouse_move
+        self._hdr_frame.mouseDoubleClickEvent = self._header_mouse_double_click
+        hdr_lay = QHBoxLayout(self._hdr_frame)
         hdr_lay.setContentsMargins(14, 0, 10, 0)
         hdr_lay.setSpacing(10)
         self._hdr_title = QLabel("First 小程序安全调试台")
@@ -900,20 +1034,35 @@ class App(QMainWindow):
         target_lay.addWidget(self._target_hook_lbl)
         self._target_name_lbl = QLabel("未连接小程序")
         self._target_name_lbl.setObjectName("target_badge_value")
-        self._target_name_lbl.setMinimumWidth(110)
+        self._target_name_lbl.setMinimumWidth(86)
+        self._target_name_lbl.setMaximumWidth(128)
         target_lay.addWidget(self._target_name_lbl)
         self._target_appid_lbl = QLabel("AppID --")
         self._target_appid_lbl.setObjectName("target_badge_meta")
-        self._target_appid_lbl.setMinimumWidth(130)
+        self._target_appid_lbl.setMinimumWidth(86)
+        self._target_appid_lbl.setMaximumWidth(128)
         target_lay.addWidget(self._target_appid_lbl)
         self._target_cdp_lbl = QLabel("CDP --")
         self._target_cdp_lbl.setObjectName("target_badge_meta")
+        self._target_cdp_lbl.setMaximumWidth(86)
         target_lay.addWidget(self._target_cdp_lbl)
         self._target_status_lbl = QLabel("未连接")
         self._target_status_lbl.setObjectName("target_badge_status")
         target_lay.addWidget(self._target_status_lbl)
         hdr_lay.addWidget(self._target_badge)
-        hdr_wrap_lay.addWidget(hdr_frame)
+        self._win_btn_min = WindowButton("min", self._tn)
+        self._win_btn_min.setToolTip("最小化")
+        self._win_btn_min.clicked.connect(self.showMinimized)
+        hdr_lay.addWidget(self._win_btn_min)
+        self._win_btn_max = WindowButton("max", self._tn)
+        self._win_btn_max.setToolTip("最大化 / 还原")
+        self._win_btn_max.clicked.connect(self._toggle_window_maximized)
+        hdr_lay.addWidget(self._win_btn_max)
+        self._win_btn_close = WindowButton("close", self._tn)
+        self._win_btn_close.setToolTip("关闭")
+        self._win_btn_close.clicked.connect(self.close)
+        hdr_lay.addWidget(self._win_btn_close)
+        hdr_wrap_lay.addWidget(self._hdr_frame)
         root_v.addWidget(hdr_wrap)
 
         body = QWidget()
@@ -961,11 +1110,7 @@ class App(QMainWindow):
             row_lay = QHBoxLayout(row)
             row_lay.setContentsMargins(10, 0, 8, 0)
             row_lay.setSpacing(6)
-            ic = QLabel(icon)
-            ic.setProperty("class", "sb_icon")
-            ic.setFont(QFont(_FN, 13))
-            ic.setAlignment(Qt.AlignCenter)
-            ic.setFixedSize(22, 22)
+            ic = MenuIcon(pid, self._tn)
             nm = QLabel(name)
             nm.setProperty("class", "sb_name")
             nm.setFont(QFont(_FN, 10))
@@ -1064,17 +1209,19 @@ class App(QMainWindow):
         flow_row = QHBoxLayout()
         flow_row.setSpacing(8)
         self._flow_steps = {}
+        self._flow_lines = []
         for idx, (key, label) in enumerate((
-            ("start", "启动调试"),
-            ("miniapp", "小程序连接"),
-            ("hook", "Hook 注入"),
-            ("devtools", "DevTools 可用"),
+            ("start", "启动"),
+            ("miniapp", "连接"),
+            ("hook", "Hook"),
+            ("devtools", "DevTools"),
         )):
             if idx:
                 line = QFrame()
                 line.setFixedHeight(1)
                 line.setStyleSheet(f"background: {_TH[self._tn]['border']};")
                 flow_row.addWidget(line, 1)
+                self._flow_lines.append(line)
             step = QHBoxLayout()
             step.setSpacing(5)
             dot = StatusDot()
@@ -1097,7 +1244,7 @@ class App(QMainWindow):
         self._tog_devtools_bp = ToggleSwitch(self._cfg.get("allow_devtools_breakpoints", False))
         self._tog_devtools_bp.toggled.connect(self._on_devtools_breakpoints_toggled)
         row1.addWidget(self._tog_devtools_bp)
-        row1.addWidget(QLabel("允许 DevTools 断点"))
+        row1.addWidget(QLabel("断点"))
         row1.addSpacing(12)
         self._devtools_bp_status_lbl = QLabel("")
         self._devtools_bp_status_lbl.setProperty("class", "muted")
@@ -1134,6 +1281,7 @@ class App(QMainWindow):
         top_row.addWidget(c1, 3)
 
         ctx_card = _make_card()
+        ctx_card.setMinimumWidth(210)
         ctx_lay = QVBoxLayout(ctx_card)
         ctx_lay.setContentsMargins(18, 14, 18, 14)
         ctx_lay.setSpacing(8)
@@ -3741,6 +3889,28 @@ class App(QMainWindow):
         self._stack.setCurrentIndexAnimated(idx)
         self._hl_sb()
 
+    def _header_mouse_press(self, event):
+        """记录顶部栏拖拽起点，用于无边框窗口移动。"""
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def _header_mouse_move(self, event):
+        """拖动顶部栏移动窗口，最大化状态下不移动。"""
+        if event.buttons() & Qt.LeftButton and self._drag_pos and not self.isMaximized():
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def _header_mouse_double_click(self, event):
+        """双击顶部栏切换最大化和还原状态。"""
+        if event.button() == Qt.LeftButton:
+            self._toggle_window_maximized()
+
+    def _toggle_window_maximized(self):
+        """切换主窗口最大化和普通窗口状态。"""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
     def _hl_sb(self):
         for pid, (fr, ic, nm) in self._sb_items.items():
             if pid == self._pg:
@@ -3749,8 +3919,11 @@ class App(QMainWindow):
                 fr.setProperty("class", "sb_item")
             fr.style().unpolish(fr)
             fr.style().polish(fr)
-            ic.style().unpolish(ic)
-            ic.style().polish(ic)
+            if hasattr(ic, "set_state"):
+                ic.set_state(pid == self._pg, self._tn)
+            else:
+                ic.style().unpolish(ic)
+                ic.style().polish(ic)
             nm.style().unpolish(nm)
             nm.style().polish(nm)
 
@@ -3772,6 +3945,7 @@ class App(QMainWindow):
         self._render_control_logbox()
         self._render_logbox()
         self._hl_sb()
+        self._update_window_buttons()
         self._auto_save()
 
     def _update_theme_label(self):
@@ -3779,6 +3953,15 @@ class App(QMainWindow):
         self._sb_theme.setText(txt)
         if hasattr(self, "_sb_theme_icon"):
             self._sb_theme_icon.set_theme(self._tn)
+        self._update_window_buttons()
+
+    def _update_window_buttons(self):
+        """刷新自定义窗口按钮的主题颜色。"""
+        for btn in (getattr(self, "_win_btn_min", None),
+                    getattr(self, "_win_btn_max", None),
+                    getattr(self, "_win_btn_close", None)):
+            if btn:
+                btn.set_theme(self._tn)
 
     def _update_toggle_colors(self):
         """根据当前主题刷新所有开关控件的开启和关闭颜色。"""
@@ -3802,12 +3985,16 @@ class App(QMainWindow):
         is_connected = self._miniapp_connected if connected is None else bool(connected)
         app_name = self._current_app_name or "未连接小程序"
         app_id = self._current_app_id or "--"
+        app_name_text = app_name if len(app_name) <= 12 else f"{app_name[:11]}..."
+        app_id_text = app_id if len(app_id) <= 16 else f"{app_id[:8]}...{app_id[-5:]}"
         self._target_hook_lbl.setText("Hook")
         self._target_hook_lbl.setStyleSheet(f"color: {c['success'] if is_connected else c['text3']};")
         if hasattr(self, "_target_dot"):
             self._target_dot.set_color(c["success"] if is_connected else c["text4"])
-        self._target_name_lbl.setText(app_name)
-        self._target_appid_lbl.setText(f"AppID {app_id}")
+        self._target_name_lbl.setText(app_name_text)
+        self._target_name_lbl.setToolTip(app_name)
+        self._target_appid_lbl.setText(f"AppID {app_id_text}")
+        self._target_appid_lbl.setToolTip(app_id)
         self._target_cdp_lbl.setText(f"CDP :{self._cp_ent.text() if hasattr(self, '_cp_ent') else '--'}")
         self._target_status_lbl.setText("已连接" if is_connected else "未连接")
         self._target_status_lbl.setStyleSheet(
@@ -3828,10 +4015,14 @@ class App(QMainWindow):
             "hook": bool(self._hook_injected),
             "devtools": bool(current.get("devtools")),
         }
+        passed = False
         for key, (dot, label) in self._flow_steps.items():
             on = states.get(key, False)
+            passed = passed or on
             dot.set_color(c["success"] if on else c["text4"])
             label.setStyleSheet(f"color: {c['text1'] if on else c['text3']};")
+        for line in getattr(self, "_flow_lines", []):
+            line.setStyleSheet(f"background: {c['accent'] if passed else c['border']};")
 
     def _auto_save(self):
         """保存 GUI 的主题、调试开关、提取配置和 MCP 权限配置。"""
@@ -4738,10 +4929,10 @@ class App(QMainWindow):
             return
         c = _TH[self._tn]
         if self._devtools_breakpoints_enabled():
-            self._devtools_bp_status_lbl.setText("状态: 允许暂停")
+            self._devtools_bp_status_lbl.setText("允许暂停")
             self._devtools_bp_status_lbl.setStyleSheet(f"color: {c['success']};")
         else:
-            self._devtools_bp_status_lbl.setText("状态: 跳过暂停")
+            self._devtools_bp_status_lbl.setText("跳过暂停")
             self._devtools_bp_status_lbl.setStyleSheet(f"color: {c['warning']};")
 
     def _on_devtools_breakpoints_toggled(self, checked):
