@@ -1146,6 +1146,8 @@ class App(QMainWindow):
         self._mcp_permissions.update(self._cfg.get("mcp_permissions", {}))
         self._mcp_permission_toggles = {}
         self._mcp_q = queue.Queue()
+        self._mcp_targets = []
+        self._mcp_target_syncing = False
         self._mcp_runtime_scripts = {}
         self._mcp_breakpoints = {}
         self._mcp_pause_state = None
@@ -2115,6 +2117,19 @@ class App(QMainWindow):
         status_grid.addWidget(self._mcp_app_lbl, 1, 1)
         status_grid.addWidget(self._mcp_route_lbl, 2, 0, 1, 2)
         status_lay.addLayout(status_grid)
+
+        target_row = QHBoxLayout()
+        target_row.setSpacing(10)
+        target_row.addWidget(QLabel("Target"))
+        self._mcp_target_combo = QComboBox()
+        self._mcp_target_combo.setMinimumWidth(320)
+        self._mcp_target_combo.currentIndexChanged.connect(self._on_mcp_target_changed)
+        target_row.addWidget(self._mcp_target_combo, 1)
+        self._mcp_target_hint_lbl = QLabel("未发现 JS Context")
+        self._mcp_target_hint_lbl.setProperty("class", "muted")
+        target_row.addWidget(self._mcp_target_hint_lbl)
+        status_lay.addLayout(target_row)
+        self._refresh_mcp_target_combo([])
 
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(8)
@@ -4394,6 +4409,61 @@ class App(QMainWindow):
         sb = self._mcp_logbox.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    def _mcp_target_label(self, item):
+        """Build one compact display label for a JS runtime target."""
+        name = str(item.get("jscontext_name", "") or "").strip() or "(unnamed)"
+        kind = str(item.get("kind", "unknown") or "unknown")
+        ctx_id = str(item.get("jscontext_id", "") or "")
+        parts = [name, kind]
+        if ctx_id:
+            parts.append(ctx_id[:12])
+        if item.get("recommended"):
+            parts.append("recommended")
+        if item.get("connected"):
+            parts.append("active")
+        return " | ".join(parts)
+
+    def _refresh_mcp_target_combo(self, contexts):
+        """Refresh the MCP target combo box from the latest JS context snapshot."""
+        self._mcp_targets = list(contexts or [])
+        if not hasattr(self, "_mcp_target_combo"):
+            return
+        selected_id = next(
+            (ctx.get("jscontext_id", "") for ctx in self._mcp_targets if ctx.get("selected")),
+            "",
+        )
+        self._mcp_target_syncing = True
+        try:
+            combo = self._mcp_target_combo
+            combo.clear()
+            combo.addItem("自动选择（推荐）", "")
+            target_index = 0
+            for idx, item in enumerate(self._mcp_targets, start=1):
+                combo.addItem(self._mcp_target_label(item), item.get("jscontext_id", ""))
+                if item.get("jscontext_id", "") == selected_id:
+                    target_index = idx
+            combo.setCurrentIndex(target_index)
+        finally:
+            self._mcp_target_syncing = False
+
+        if not self._mcp_targets:
+            self._mcp_target_hint_lbl.setText("未发现 JS Context")
+        else:
+            selected = next((ctx for ctx in self._mcp_targets if ctx.get("selected")), None)
+            recommended = next((ctx for ctx in self._mcp_targets if ctx.get("recommended")), None)
+            current = selected or recommended or self._mcp_targets[0]
+            hint = current.get("jscontext_name", "") or current.get("jscontext_id", "") or "unknown"
+            self._mcp_target_hint_lbl.setText(f"当前: {hint}")
+
+    def _on_mcp_target_changed(self, index):
+        """Apply one manually selected MCP JS runtime target."""
+        if self._mcp_target_syncing:
+            return
+        if not self._engine or not self._loop or not self._loop.is_running():
+            return
+        target_id = self._mcp_target_combo.itemData(index) if hasattr(self, "_mcp_target_combo") else ""
+        asyncio.run_coroutine_threadsafe(self._engine.activate_js_context(target_id), self._loop)
+
     def _set_mcp_permission(self, key, enabled):
         """Persist a changed MCP permission and record the change in the log."""
         self._mcp_permissions[key] = bool(enabled)
@@ -4561,6 +4631,7 @@ class App(QMainWindow):
     def _mcp_context_snapshot(self):
         """Build a lightweight state snapshot returned by the MCP service."""
         sts = self._engine.status if self._engine else {}
+        selected_target = self._engine.get_selected_js_context() if self._engine else {}
         return {
             "ok": True,
             "debug_running": self._running,
@@ -4569,6 +4640,8 @@ class App(QMainWindow):
             "devtools": bool(sts.get("devtools", False)),
             "appid": self._mcp_appid,
             "route": self._mcp_route,
+            "selected_target": selected_target,
+            "target_count": len(self._engine.list_js_contexts()) if self._engine else 0,
             "permissions": dict(self._mcp_permissions),
         }
 
@@ -4643,6 +4716,21 @@ class App(QMainWindow):
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
             return self._mcp_tool_clear_cloud_calls()
+        if name == "list_targets":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            return self._mcp_tool_list_targets()
+        if name == "get_selected_target":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            return self._mcp_tool_get_selected_target()
+        if name == "select_target":
+            if not self._mcp_require_permission("read_status"):
+                return {"ok": False, "error": "permission denied: read_status"}
+            jscontext_id = str(arguments.get("jscontext_id", "") or "").strip()
+            if not jscontext_id:
+                return {"ok": False, "error": "missing jscontext_id"}
+            return self._mcp_tool_select_target(jscontext_id)
         if name == "list_runtime_scripts":
             if not self._mcp_require_permission("read_scripts"):
                 return {"ok": False, "error": "permission denied: read_scripts"}
@@ -4957,6 +5045,54 @@ class App(QMainWindow):
         try:
             result = self._mcp_run_coro(self._auditor.clear_calls(), 6.0)
             return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def _mcp_targets_snapshot_async(self):
+        """Read current js runtime targets from the debug engine event loop."""
+        return {
+            "targets": self._engine.list_js_contexts() if self._engine else [],
+            "selected_target": self._engine.get_selected_js_context() if self._engine else {},
+        }
+
+    async def _mcp_select_target_async(self, jscontext_id):
+        """Select one js runtime target on the debug engine event loop."""
+        if not self._engine:
+            raise RuntimeError("debug engine not started")
+        return await self._engine.activate_js_context(jscontext_id)
+
+    def _mcp_tool_list_targets(self):
+        """List current miniapp js runtime targets."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._mcp_targets_snapshot_async(), 5.0)
+            return {"ok": True, **result, "count": len(result.get("targets", []))}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_get_selected_target(self):
+        """Read the current selected miniapp js runtime target."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(self._mcp_targets_snapshot_async(), 5.0)
+            return {"ok": True, "selected_target": result.get("selected_target", {})}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_select_target(self, jscontext_id):
+        """Select one miniapp js runtime target by jscontext_id."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            selected = self._mcp_run_coro(self._mcp_select_target_async(jscontext_id), 5.0)
+            return {"ok": True, "selected_target": selected}
+        except KeyError:
+            return {"ok": False, "error": f"unknown jscontext_id: {jscontext_id}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -5846,6 +5982,7 @@ class App(QMainWindow):
         self._navigator = MiniProgramNavigator(self._engine)
         self._auditor = CloudAuditor(self._engine)
         self._engine.on_status_change(lambda s: self._sts_q.put(s))
+        self._engine.on_contexts_change(lambda ctxs: self._mcp_q.put(("targets", ctxs)))
         self._loop = asyncio.new_event_loop()
         self._loop_th = threading.Thread(
             target=lambda: (asyncio.set_event_loop(self._loop), self._loop.run_forever()),
@@ -6721,6 +6858,8 @@ class App(QMainWindow):
         kind = item[0]
         if kind == "log":
             self._mcp_add_log(item[1])
+        elif kind == "targets":
+            self._refresh_mcp_target_combo(item[1])
 
     def _apply_sts(self, sts):
         """更新主界面连接状态，并在小程序连接变化时触发相关后台动作。"""

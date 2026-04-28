@@ -9,7 +9,7 @@ BASIC_TOOLS = [
     },
     {
         "name": "evaluate_js",
-        "description": "Evaluate JavaScript in the current miniapp runtime. Requires the execute JS permission.",
+        "description": "Evaluate JavaScript in the selected miniapp runtime target. Requires the execute JS permission.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -79,6 +79,27 @@ BASIC_TOOLS = [
         "name": "clear_cloud_calls",
         "description": "Clear captured cloud, database, storage, and container call records from the miniapp runtime.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_targets",
+        "description": "List current miniapp JS runtime targets and mark the recommended appservice target.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_selected_target",
+        "description": "Read the currently selected miniapp JS runtime target.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "select_target",
+        "description": "Select one miniapp JS runtime target by jscontext_id for later evaluate_js and capture operations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "jscontext_id": {"type": "string", "description": "Target jscontext_id returned by list_targets."},
+            },
+            "required": ["jscontext_id"],
+        },
     },
     {
         "name": "list_runtime_scripts",

@@ -16,7 +16,11 @@ import websockets
 import websockets.server
 import websockets.exceptions
 
-from .codex import wrap_debug_message_data, unwrap_debug_message_data
+from .codex import (
+    wrap_debug_message_data,
+    unwrap_debug_message_data,
+)
+from .constants import DebugMessageCategory
 from .third_party import wmpf_debug_pb2 as proto
 from .userscript import (
     build_cdp_enable_page_command,
@@ -51,10 +55,10 @@ def buffer_to_hex_string(data: bytes) -> str:
     return data.hex()
 
 
-def _build_protobuf_cdp_message(cdp_json: str, seq: int) -> bytes:
+def _build_protobuf_cdp_message(cdp_json: str, seq: int, jscontext_id: str = "") -> bytes:
     """Wrap a CDP JSON command into protobuf binary for sending to the miniapp runtime."""
     raw_payload = {
-        "jscontext_id": "",
+        "jscontext_id": str(jscontext_id or ""),
         "op_id": round(100 * random.random()),
         "payload": cdp_json,
     }
@@ -87,10 +91,26 @@ class DebugEngine:
         self._cmd_counter = 80000
         self._status_callbacks = []
         self._event_listeners = {}   # method -> [callback, ...]
+        self._context_callbacks = []
+        self._js_contexts = {}
+        self._selected_jscontext_id = ""
+        self._connected_jscontext_id = ""
         self.status = {"frida": False, "miniapp": False, "devtools": False}
 
     def on_status_change(self, callback):
         self._status_callbacks.append(callback)
+
+    def on_contexts_change(self, callback):
+        """Subscribe to js context registry changes."""
+        self._context_callbacks.append(callback)
+
+    def _notify_contexts(self):
+        snapshot = self.list_js_contexts()
+        for cb in self._context_callbacks:
+            try:
+                cb(snapshot)
+            except Exception:
+                pass
 
     def _notify_status(self, key, value):
         self.status[key] = value
@@ -144,13 +164,69 @@ class DebugEngine:
         self.devtools_clients.clear()
         self.message_counter = 0
         self._pending_responses.clear()
+        self._js_contexts.clear()
+        self._selected_jscontext_id = ""
+        self._connected_jscontext_id = ""
+        self._notify_contexts()
         self.logger.info("[server] engine stopped")
 
-    async def evaluate_js(self, expression, timeout=5.0):
-        """Send Runtime.evaluate via CDP to the miniapp, return result dict."""
+    def _preferred_jscontext_id(self):
+        """Return the selected js context id or a best-effort fallback."""
+        if self._selected_jscontext_id and self._selected_jscontext_id in self._js_contexts:
+            return self._selected_jscontext_id
+        if self._connected_jscontext_id and self._connected_jscontext_id in self._js_contexts:
+            return self._connected_jscontext_id
+        recommended = next(
+            (ctx["jscontext_id"] for ctx in self.list_js_contexts() if ctx.get("recommended")),
+            "",
+        )
+        return recommended
+
+    def _emit_wrapped_cdp_command(self, cdp_cmd: str, jscontext_id: str = ""):
+        """Send one wrapped CDP command to all connected miniapp clients."""
+        self.message_counter += 1
+        payload = {
+            "jscontext_id": str(jscontext_id or ""),
+            "op_id": round(100 * random.random()),
+            "payload": str(cdp_cmd),
+        }
+        self.logger.main_debug(payload)
+        encoded = _build_protobuf_cdp_message(cdp_cmd, self.message_counter, jscontext_id)
+        clients_snapshot = list(self.miniapp_clients)
+        for ws in clients_snapshot:
+            try:
+                task = asyncio.ensure_future(ws.send(encoded))
+                task.add_done_callback(
+                    lambda t: t.exception() if t.done() and not t.cancelled() and t.exception() else None)
+            except Exception:
+                pass
+
+    def _emit_debug_message(self, category: str, data: dict):
+        """Send one non-CDP debug message to all connected miniapp clients."""
+        self.message_counter += 1
+        wrapped = wrap_debug_message_data(data, category, 0)
+        out_msg = proto.WARemoteDebug_DebugMessage()
+        out_msg.seq = self.message_counter
+        out_msg.category = category
+        out_msg.data = wrapped["buffer"]
+        out_msg.compressAlgo = 0
+        out_msg.originalSize = wrapped["originalSize"]
+        encoded = out_msg.SerializeToString()
+        clients_snapshot = list(self.miniapp_clients)
+        for ws in clients_snapshot:
+            try:
+                task = asyncio.ensure_future(ws.send(encoded))
+                task.add_done_callback(
+                    lambda t: t.exception() if t.done() and not t.cancelled() and t.exception() else None)
+            except Exception:
+                pass
+
+    async def evaluate_js(self, expression, timeout=5.0, jscontext_id=None):
+        """Send Runtime.evaluate via CDP to the selected miniapp js context when available."""
         if not self.miniapp_clients:
             raise RuntimeError("No miniapp client connected")
         cmd_id = self._next_cmd_id()
+        target_id = str(jscontext_id or self._preferred_jscontext_id() or "")
         cdp_cmd = json.dumps({
             "id": cmd_id,
             "method": "Runtime.evaluate",
@@ -159,28 +235,104 @@ class DebugEngine:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self._pending_responses[cmd_id] = future
-        self.bus.emit_proxy_message(cdp_cmd)
+        self._emit_wrapped_cdp_command(cdp_cmd, target_id)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending_responses.pop(cmd_id, None)
             raise
 
-    async def send_cdp_command(self, method, params=None, timeout=5.0):
-        """Send an arbitrary CDP command and return the response."""
+    async def send_cdp_command(self, method, params=None, timeout=5.0, jscontext_id=None):
+        """Send an arbitrary CDP command to the selected miniapp js context and return the response."""
         if not self.miniapp_clients:
             raise RuntimeError("No miniapp client connected")
         cmd_id = self._next_cmd_id()
+        target_id = str(jscontext_id or self._preferred_jscontext_id() or "")
         cdp_cmd = json.dumps({"id": cmd_id, "method": method, "params": params or {}})
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self._pending_responses[cmd_id] = future
-        self.bus.emit_proxy_message(cdp_cmd)
+        self._emit_wrapped_cdp_command(cdp_cmd, target_id)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending_responses.pop(cmd_id, None)
             raise
+
+    def _context_kind(self, name):
+        """Classify a js context name into appservice, webview, or unknown."""
+        lowered = str(name or "").strip().lower()
+        if any(token in lowered for token in ("appservice", "waservice", "service")):
+            return "appservice"
+        if any(token in lowered for token in ("webview", "renderer", "render")):
+            return "webview"
+        return "unknown"
+
+    def _maybe_autoselect_context(self):
+        """Select a preferred js context when the current selection is missing."""
+        if self._selected_jscontext_id and self._selected_jscontext_id in self._js_contexts:
+            return
+        contexts = self.list_js_contexts()
+        if not contexts:
+            self._selected_jscontext_id = ""
+            return
+        preferred = next((ctx["jscontext_id"] for ctx in contexts if ctx.get("recommended")), "")
+        self._selected_jscontext_id = preferred or contexts[0]["jscontext_id"]
+
+    def list_js_contexts(self):
+        """Return cached js contexts with selection and recommendation metadata."""
+        rows = []
+        for ctx_id, item in self._js_contexts.items():
+            name = item.get("jscontext_name", "")
+            kind = self._context_kind(name)
+            rows.append({
+                "jscontext_id": ctx_id,
+                "jscontext_name": name,
+                "kind": kind,
+                "recommended": kind == "appservice",
+                "selected": ctx_id == self._selected_jscontext_id,
+                "connected": ctx_id == self._connected_jscontext_id,
+            })
+        rows.sort(key=lambda item: (
+            0 if item.get("selected") else 1,
+            0 if item.get("recommended") else 1,
+            0 if item.get("connected") else 1,
+            item.get("jscontext_name", ""),
+            item.get("jscontext_id", ""),
+        ))
+        return rows
+
+    def get_selected_js_context(self):
+        """Return the currently selected js context metadata when available."""
+        selected_id = self._preferred_jscontext_id()
+        if not selected_id:
+            return {}
+        return next((ctx for ctx in self.list_js_contexts() if ctx["jscontext_id"] == selected_id), {})
+
+    def select_js_context(self, jscontext_id):
+        """Select one cached js context by id for subsequent JS execution."""
+        target_id = str(jscontext_id or "").strip()
+        if not target_id:
+            self._selected_jscontext_id = ""
+            self._maybe_autoselect_context()
+            self._notify_contexts()
+            return self.get_selected_js_context()
+        if target_id not in self._js_contexts:
+            raise KeyError(target_id)
+        self._selected_jscontext_id = target_id
+        self._notify_contexts()
+        return self.get_selected_js_context()
+
+    async def activate_js_context(self, jscontext_id):
+        """Select one js context and ask the remote runtime to switch to it."""
+        selected = self.select_js_context(jscontext_id)
+        target_id = str(selected.get("jscontext_id", "") or "")
+        if target_id:
+            self._emit_debug_message(
+                DebugMessageCategory.ConnectJsContext,
+                {"jscontext_id": target_id},
+            )
+        return selected
 
     async def set_extra_headers(self, headers: dict):
         """Enable Network domain and set extra HTTP headers via CDP."""
@@ -372,6 +524,10 @@ class DebugEngine:
                 engine.miniapp_clients.discard(websocket)
                 if not engine.miniapp_clients:
                     engine._notify_status("miniapp", False)
+                    engine._js_contexts.clear()
+                    engine._selected_jscontext_id = ""
+                    engine._connected_jscontext_id = ""
+                    engine._notify_contexts()
                     # 清理所有挂起的 CDP 响应，防止 future 泄漏
                     for fid, fut in list(engine._pending_responses.items()):
                         if not fut.done():
@@ -404,8 +560,41 @@ class DebugEngine:
         if unwrapped_data is None:
             return
 
-        if unwrapped_data.get("category") == "chromeDevtoolsResult":
-            payload = unwrapped_data["data"].get("payload", "")
+        category = unwrapped_data.get("category")
+        data = unwrapped_data.get("data", {}) if isinstance(unwrapped_data.get("data"), dict) else {}
+        if category == "addJsContext":
+            ctx_id = str(data.get("jscontext_id", "") or "").strip()
+            if ctx_id:
+                self._js_contexts[ctx_id] = {
+                    "jscontext_id": ctx_id,
+                    "jscontext_name": str(data.get("jscontext_name", "") or ""),
+                }
+                self._maybe_autoselect_context()
+                self._notify_contexts()
+        elif category == "removeJsContext":
+            ctx_id = str(data.get("jscontext_id", "") or "").strip()
+            if ctx_id and ctx_id in self._js_contexts:
+                self._js_contexts.pop(ctx_id, None)
+                if self._connected_jscontext_id == ctx_id:
+                    self._connected_jscontext_id = ""
+                if self._selected_jscontext_id == ctx_id:
+                    self._selected_jscontext_id = ""
+                self._maybe_autoselect_context()
+                self._notify_contexts()
+        elif category == "connectJsContext":
+            ctx_id = str(data.get("jscontext_id", "") or "").strip()
+            if ctx_id:
+                self._connected_jscontext_id = ctx_id
+                if ctx_id not in self._js_contexts:
+                    self._js_contexts[ctx_id] = {
+                        "jscontext_id": ctx_id,
+                        "jscontext_name": "",
+                    }
+                self._maybe_autoselect_context()
+                self._notify_contexts()
+
+        if category == "chromeDevtoolsResult":
+            payload = data.get("payload", "")
             self.bus.emit_cdp_message(payload)
             # Also check for pending evaluate_js responses
             self._handle_cdp_response(payload)
