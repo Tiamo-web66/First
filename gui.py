@@ -143,12 +143,14 @@ def build_qss(tn):
     /* ── 侧栏 ── */
     QFrame#sidebar {{
         background: {c['sidebar']};
+        border: 1px solid {c['border']};
+        border-radius: 16px;
     }}
     QFrame#sidebar QLabel {{
         background: transparent;
     }}
     QFrame#sb_head {{
-        background: {c['sidebar']};
+        background: transparent;
     }}
     QLabel#sb_logo {{
         color: {c['text1']};
@@ -171,7 +173,7 @@ def build_qss(tn):
 
     /* ── 菜单项 ── */
     QFrame.sb_item {{
-        background: {c['sidebar']};
+        background: transparent;
         border-radius: 8px;
         padding: 8px 10px;
     }}
@@ -185,19 +187,33 @@ def build_qss(tn):
     }}
     QFrame.sb_item QLabel.sb_icon {{
         color: {c['text3']};
-        background: transparent;
+        background: {c['input']};
+        border-radius: 7px;
+        min-width: 22px; max-width: 22px;
+        min-height: 22px; max-height: 22px;
     }}
     QFrame.sb_item QLabel.sb_name {{
         color: {c['text2']};
         background: transparent;
     }}
     QFrame.sb_item_active QLabel.sb_icon {{
-        color: {c['accent']};
-        background: transparent;
+        color: #ffffff;
+        background: {c['accent']};
+        border-radius: 7px;
     }}
     QFrame.sb_item_active QLabel.sb_name {{
         color: {c['text1']};
         background: transparent;
+    }}
+    QFrame#sidebar QFrame.sb_item QLabel.sb_icon {{
+        color: {c['text3']};
+        background: {c['input']};
+        border-radius: 7px;
+    }}
+    QFrame#sidebar QFrame.sb_item_active QLabel.sb_icon {{
+        color: #ffffff;
+        background: {c['accent']};
+        border-radius: 7px;
     }}
 
     /* ── 分割线 ── */
@@ -213,14 +229,14 @@ def build_qss(tn):
     /* ── 标题 ── */
     QLabel#page_title {{
         color: {c['text1']};
-        font-size: 18px; font-weight: bold;
-        padding-left: 28px;
+        font-size: 13px; font-weight: bold;
+        padding-left: 6px;
         background: transparent;
     }}
 
     QFrame#top_bar {{
         background: {c['card']};
-        border-radius: 16px;
+        border-radius: 14px;
         border: 1px solid {c['border']};
     }}
     QFrame#target_badge {{
@@ -691,6 +707,44 @@ class StatusDot(QWidget):
         p.drawEllipse(1, 1, 8, 8)
 
 
+class ThemeIcon(QWidget):
+    """绘制侧栏主题切换图标，避免依赖字体中的太阳或月亮字符。"""
+
+    def __init__(self, theme="dark", parent=None):
+        """初始化固定尺寸的主题图标控件。"""
+        super().__init__(parent)
+        self._theme = theme
+        self.setFixedSize(18, 18)
+
+    def set_theme(self, theme):
+        """切换图标展示的主题状态并触发重绘。"""
+        self._theme = theme
+        self.update()
+
+    def paintEvent(self, e):
+        """根据当前主题绘制太阳或月亮图标。"""
+        c = _TH.get(self._theme, _D)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        if self._theme == "light":
+            sun = QColor(c["warning"])
+            p.setBrush(sun)
+            p.drawEllipse(6, 6, 6, 6)
+            p.setPen(sun)
+            for x1, y1, x2, y2 in (
+                (9, 1, 9, 4), (9, 14, 9, 17), (1, 9, 4, 9), (14, 9, 17, 9),
+                (3, 3, 5, 5), (13, 13, 15, 15), (13, 5, 15, 3), (3, 15, 5, 13),
+            ):
+                p.drawLine(x1, y1, x2, y2)
+        else:
+            moon = QColor(c["accent"])
+            p.setBrush(moon)
+            p.drawEllipse(4, 3, 11, 12)
+            p.setBrush(QColor(c["sidebar"]))
+            p.drawEllipse(8, 1, 10, 13)
+
+
 # ══════════════════════════════════════════
 #  辅助函数
 # ══════════════════════════════════════════
@@ -752,6 +806,8 @@ class App(QMainWindow):
         self._cloud_call_history = {}
         self._cloud_all_items = []
         self._cloud_row_results = {}
+        self._cloud_result_by_vals = {}
+        self._last_sts = {}
         self._cancel_ev = None
         self._route_poll_id = None
         self._all_routes = []
@@ -812,9 +868,58 @@ class App(QMainWindow):
         central = QWidget()
         central.setObjectName("central")
         self.setCentralWidget(central)
-        root_h = QHBoxLayout(central)
-        root_h.setContentsMargins(0, 0, 0, 0)
-        root_h.setSpacing(0)
+        root_v = QVBoxLayout(central)
+        root_v.setContentsMargins(0, 0, 0, 0)
+        root_v.setSpacing(0)
+
+        hdr_wrap = QWidget()
+        hdr_wrap_lay = QVBoxLayout(hdr_wrap)
+        hdr_wrap_lay.setContentsMargins(12, 10, 12, 8)
+        hdr_wrap_lay.setSpacing(0)
+        hdr_frame = QFrame()
+        hdr_frame.setObjectName("top_bar")
+        hdr_frame.setFixedHeight(48)
+        hdr_lay = QHBoxLayout(hdr_frame)
+        hdr_lay.setContentsMargins(14, 0, 10, 0)
+        hdr_lay.setSpacing(10)
+        self._hdr_title = QLabel("First 小程序安全调试台")
+        self._hdr_title.setObjectName("page_title")
+        hdr_lay.addWidget(self._hdr_title)
+        hdr_lay.addStretch()
+        self._target_badge = QFrame()
+        self._target_badge.setObjectName("target_badge")
+        self._target_badge.setFixedHeight(32)
+        self._target_badge.setToolTip("当前 Hook 目标、小程序 AppID、CDP 端口和连接状态")
+        target_lay = QHBoxLayout(self._target_badge)
+        target_lay.setContentsMargins(14, 0, 10, 0)
+        target_lay.setSpacing(12)
+        self._target_dot = StatusDot()
+        target_lay.addWidget(self._target_dot)
+        self._target_hook_lbl = QLabel("Hook")
+        self._target_hook_lbl.setObjectName("target_badge_label")
+        target_lay.addWidget(self._target_hook_lbl)
+        self._target_name_lbl = QLabel("未连接小程序")
+        self._target_name_lbl.setObjectName("target_badge_value")
+        self._target_name_lbl.setMinimumWidth(110)
+        target_lay.addWidget(self._target_name_lbl)
+        self._target_appid_lbl = QLabel("AppID --")
+        self._target_appid_lbl.setObjectName("target_badge_meta")
+        self._target_appid_lbl.setMinimumWidth(130)
+        target_lay.addWidget(self._target_appid_lbl)
+        self._target_cdp_lbl = QLabel("CDP --")
+        self._target_cdp_lbl.setObjectName("target_badge_meta")
+        target_lay.addWidget(self._target_cdp_lbl)
+        self._target_status_lbl = QLabel("未连接")
+        self._target_status_lbl.setObjectName("target_badge_status")
+        target_lay.addWidget(self._target_status_lbl)
+        hdr_lay.addWidget(self._target_badge)
+        hdr_wrap_lay.addWidget(hdr_frame)
+        root_v.addWidget(hdr_wrap)
+
+        body = QWidget()
+        body_h = QHBoxLayout(body)
+        body_h.setContentsMargins(12, 0, 12, 12)
+        body_h.setSpacing(12)
 
         # ── 侧栏 ──
         self._sb = QFrame()
@@ -859,6 +964,8 @@ class App(QMainWindow):
             ic = QLabel(icon)
             ic.setProperty("class", "sb_icon")
             ic.setFont(QFont(_FN, 13))
+            ic.setAlignment(Qt.AlignCenter)
+            ic.setFixedSize(22, 22)
             nm = QLabel(name)
             nm.setProperty("class", "sb_name")
             nm.setFont(QFont(_FN, 10))
@@ -872,16 +979,25 @@ class App(QMainWindow):
 
         self._sb_theme = QLabel()
         self._sb_theme.setObjectName("sb_theme")
-        self._sb_theme.setAlignment(Qt.AlignCenter)
+        self._sb_theme.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._sb_theme.setCursor(Qt.PointingHandCursor)
         self._sb_theme.setFont(QFont(_FN, 9))
         self._sb_theme.mousePressEvent = lambda e: self._toggle_theme()
         sb_lay.addSpacing(8)
-        theme_wrap = QWidget()
-        theme_lay = QHBoxLayout(theme_wrap)
-        theme_lay.setContentsMargins(16, 0, 16, 0)
+        self._sb_theme_icon = ThemeIcon(self._tn)
+        self._sb_theme_icon.setCursor(Qt.PointingHandCursor)
+        self._sb_theme_icon.mousePressEvent = lambda e: self._toggle_theme()
+        self._theme_wrap = QWidget()
+        self._theme_wrap.setCursor(Qt.PointingHandCursor)
+        self._theme_wrap.setToolTip("切换浅色 / 深色主题")
+        self._theme_wrap.mousePressEvent = lambda e: self._toggle_theme()
+        theme_lay = QHBoxLayout(self._theme_wrap)
+        theme_lay.setContentsMargins(26, 0, 16, 0)
+        theme_lay.setSpacing(8)
+        theme_lay.addWidget(self._sb_theme_icon)
         theme_lay.addWidget(self._sb_theme)
-        sb_lay.addWidget(theme_wrap)
+        theme_lay.addStretch()
+        sb_lay.addWidget(self._theme_wrap)
 
         self._sb_author = QLabel("作者: TiAmo")
         self._sb_author.setObjectName("sb_theme")
@@ -898,12 +1014,7 @@ class App(QMainWindow):
         sb_lay.addSpacing(16)
         self._update_theme_label()
 
-        root_h.addWidget(self._sb)
-
-        vline = QFrame()
-        vline.setObjectName("vline")
-        vline.setFixedWidth(1)
-        root_h.addWidget(vline)
+        body_h.addWidget(self._sb)
 
         # ── 右侧 ──
         right = QWidget()
@@ -911,49 +1022,10 @@ class App(QMainWindow):
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(0)
 
-        hdr_frame = QFrame()
-        hdr_frame.setObjectName("top_bar")
-        hdr_frame.setFixedHeight(56)
-        hdr_lay = QHBoxLayout(hdr_frame)
-        hdr_lay.setContentsMargins(0, 0, 12, 0)
-        self._hdr_title = QLabel("")
-        self._hdr_title.setObjectName("page_title")
-        hdr_lay.addWidget(self._hdr_title)
-        hdr_lay.addStretch()
-        self._target_badge = QFrame()
-        self._target_badge.setObjectName("target_badge")
-        self._target_badge.setFixedHeight(34)
-        target_lay = QHBoxLayout(self._target_badge)
-        target_lay.setContentsMargins(14, 0, 10, 0)
-        target_lay.setSpacing(12)
-        self._target_hook_lbl = QLabel("Hook")
-        self._target_hook_lbl.setObjectName("target_badge_label")
-        target_lay.addWidget(self._target_hook_lbl)
-        self._target_name_lbl = QLabel("未连接小程序")
-        self._target_name_lbl.setObjectName("target_badge_value")
-        self._target_name_lbl.setMinimumWidth(110)
-        target_lay.addWidget(self._target_name_lbl)
-        self._target_appid_lbl = QLabel("AppID --")
-        self._target_appid_lbl.setObjectName("target_badge_meta")
-        self._target_appid_lbl.setMinimumWidth(130)
-        target_lay.addWidget(self._target_appid_lbl)
-        self._target_cdp_lbl = QLabel("CDP --")
-        self._target_cdp_lbl.setObjectName("target_badge_meta")
-        target_lay.addWidget(self._target_cdp_lbl)
-        self._target_status_lbl = QLabel("未连接")
-        self._target_status_lbl.setObjectName("target_badge_status")
-        target_lay.addWidget(self._target_status_lbl)
-        hdr_lay.addWidget(self._target_badge)
-        right_lay.addWidget(hdr_frame)
-
-        hdr_line = QFrame()
-        hdr_line.setObjectName("hdr_line")
-        hdr_line.setFixedHeight(1)
-        right_lay.addWidget(hdr_line)
-
         self._stack = AnimatedStackedWidget()
         right_lay.addWidget(self._stack, 1)
-        root_h.addWidget(right, 1)
+        body_h.addWidget(right, 1)
+        root_v.addWidget(body, 1)
 
         self._build_control()
         self._build_navigator()
@@ -988,6 +1060,32 @@ class App(QMainWindow):
         flow_tip.setProperty("class", "muted")
         flow_tip.setWordWrap(True)
         c1_lay.addWidget(flow_tip)
+
+        flow_row = QHBoxLayout()
+        flow_row.setSpacing(8)
+        self._flow_steps = {}
+        for idx, (key, label) in enumerate((
+            ("start", "启动调试"),
+            ("miniapp", "小程序连接"),
+            ("hook", "Hook 注入"),
+            ("devtools", "DevTools 可用"),
+        )):
+            if idx:
+                line = QFrame()
+                line.setFixedHeight(1)
+                line.setStyleSheet(f"background: {_TH[self._tn]['border']};")
+                flow_row.addWidget(line, 1)
+            step = QHBoxLayout()
+            step.setSpacing(5)
+            dot = StatusDot()
+            txt = QLabel(label)
+            txt.setProperty("class", "muted")
+            txt.setFont(QFont(_FN, 8))
+            step.addWidget(dot)
+            step.addWidget(txt)
+            flow_row.addLayout(step)
+            self._flow_steps[key] = (dot, txt)
+        c1_lay.addLayout(flow_row)
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("CDP 端口"))
@@ -1091,6 +1189,7 @@ class App(QMainWindow):
         log_lay.addWidget(self._control_logbox, 1)
         lay.addWidget(log_card, 1)
 
+        self._update_flow_steps()
         self._stack.addWidget(page)
         self._page_map["control"] = self._stack.count() - 1
 
@@ -1408,6 +1507,7 @@ class App(QMainWindow):
             else:
                 lbl.setText("○ 未注入")
                 lbl.setStyleSheet(f"color: {c['text3']};")
+        self._update_flow_steps()
 
     def _hook_global_toggle(self, filename, checked):
         if checked:
@@ -1483,6 +1583,9 @@ class App(QMainWindow):
         self._cloud_status_lbl = QLabel("捕获: 0 条")
         self._cloud_status_lbl.setProperty("class", "muted")
         toolbar_bottom.addWidget(self._cloud_status_lbl)
+        self._cloud_filter_count_lbl = QLabel("")
+        self._cloud_filter_count_lbl.setProperty("class", "muted")
+        toolbar_bottom.addWidget(self._cloud_filter_count_lbl)
         self._cloud_scan_lbl = QLabel("")
         self._cloud_scan_lbl.setProperty("class", "muted")
         toolbar_bottom.addWidget(self._cloud_scan_lbl)
@@ -1491,6 +1594,9 @@ class App(QMainWindow):
         self._cloud_search_ent = _make_entry("AppID / 类型 / 名称 / 参数", width=240)
         self._cloud_search_ent.textChanged.connect(self._cloud_filter)
         toolbar_bottom.addWidget(self._cloud_search_ent)
+        self._btn_cloud_clear_search = _make_btn("清除搜索", self._cloud_clear_search)
+        self._btn_cloud_clear_search.setEnabled(False)
+        toolbar_bottom.addWidget(self._btn_cloud_clear_search)
         toolbar_lay.addLayout(toolbar_bottom)
         lay.addWidget(toolbar_card)
 
@@ -1502,6 +1608,9 @@ class App(QMainWindow):
         title_row = QHBoxLayout()
         title_row.addWidget(_make_label("云函数捕获记录", bold=True))
         title_row.addStretch()
+        self._btn_cloud_copy_visible = _make_btn("复制当前", self._cloud_copy_visible_records)
+        self._btn_cloud_copy_visible.setEnabled(False)
+        title_row.addWidget(self._btn_cloud_copy_visible)
         tc_lay.addLayout(title_row)
         self._cloud_empty_hint = QLabel("等待捕获云函数、数据库、存储或容器调用记录。")
         self._cloud_empty_hint.setProperty("class", "muted")
@@ -1542,6 +1651,7 @@ class App(QMainWindow):
         call_hdr.addWidget(_make_label("手动调用", bold=True))
         call_hdr.addStretch()
         self._btn_cloud_copy_result = _make_btn("复制结果", self._cloud_copy_result)
+        self._btn_cloud_copy_result.setEnabled(False)
         call_hdr.addWidget(self._btn_cloud_copy_result)
         call_lay.addLayout(call_hdr)
 
@@ -3629,8 +3739,6 @@ class App(QMainWindow):
         self._pg = pid
         idx = self._page_map.get(pid, 0)
         self._stack.setCurrentIndexAnimated(idx)
-        titles = {k: n for k, _, n in _MENU}
-        self._hdr_title.setText(titles.get(pid, ""))
         self._hl_sb()
 
     def _hl_sb(self):
@@ -3667,8 +3775,10 @@ class App(QMainWindow):
         self._auto_save()
 
     def _update_theme_label(self):
-        txt = "日  浅色模式" if self._tn == "light" else "月  深色模式"
+        txt = "浅色模式" if self._tn == "light" else "深色模式"
         self._sb_theme.setText(txt)
+        if hasattr(self, "_sb_theme_icon"):
+            self._sb_theme_icon.set_theme(self._tn)
 
     def _update_toggle_colors(self):
         """根据当前主题刷新所有开关控件的开启和关闭颜色。"""
@@ -3682,6 +3792,7 @@ class App(QMainWindow):
     def _refresh_sb_app_card(self):
         """主题切换时刷新顶部 Hook 目标信息条。"""
         self._update_target_badge()
+        self._update_flow_steps()
 
     def _update_target_badge(self, connected=None):
         """刷新顶部当前 Hook 小程序、AppID、CDP 端口和连接状态。"""
@@ -3693,6 +3804,8 @@ class App(QMainWindow):
         app_id = self._current_app_id or "--"
         self._target_hook_lbl.setText("Hook")
         self._target_hook_lbl.setStyleSheet(f"color: {c['success'] if is_connected else c['text3']};")
+        if hasattr(self, "_target_dot"):
+            self._target_dot.set_color(c["success"] if is_connected else c["text4"])
         self._target_name_lbl.setText(app_name)
         self._target_appid_lbl.setText(f"AppID {app_id}")
         self._target_cdp_lbl.setText(f"CDP :{self._cp_ent.text() if hasattr(self, '_cp_ent') else '--'}")
@@ -3702,6 +3815,23 @@ class App(QMainWindow):
             f"background: {'#183527' if self._tn == 'dark' and is_connected else '#263044' if self._tn == 'dark' else '#eaf7ef' if is_connected else '#f3f6fb'};"
             "border-radius: 10px; padding: 2px 10px; font-size: 10px; font-weight: bold;"
         )
+
+    def _update_flow_steps(self, sts=None):
+        """根据调试运行状态刷新控制台流程提示中的步骤圆点。"""
+        if not hasattr(self, "_flow_steps"):
+            return
+        c = _TH[self._tn]
+        current = sts or self._last_sts or {}
+        states = {
+            "start": bool(self._running),
+            "miniapp": bool(self._miniapp_connected or current.get("miniapp")),
+            "hook": bool(self._hook_injected),
+            "devtools": bool(current.get("devtools")),
+        }
+        for key, (dot, label) in self._flow_steps.items():
+            on = states.get(key, False)
+            dot.set_color(c["success"] if on else c["text4"])
+            label.setStyleSheet(f"color: {c['text1'] if on else c['text3']};")
 
     def _auto_save(self):
         """保存 GUI 的主题、调试开关、提取配置和 MCP 权限配置。"""
@@ -4836,6 +4966,7 @@ class App(QMainWindow):
         self._devtools_copy_hint.setText("点击复制")
         self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
         self._log_add("info", f"[gui] 浏览器访问: {url}")
+        self._update_flow_steps()
 
     async def _astart(self):
         try:
@@ -4855,6 +4986,7 @@ class App(QMainWindow):
         self._btn_vc_detect.setEnabled(False)
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
+        self._update_flow_steps()
 
     def _do_stop(self):
         if not self._running:
@@ -4895,6 +5027,8 @@ class App(QMainWindow):
         self._mcp_appid = ""
         self._mcp_route = ""
         self._update_mcp_debug_status({"frida": False, "miniapp": False, "devtools": False})
+        self._last_sts = {}
+        self._update_flow_steps()
 
     def _nav_btns(self, on):
         for b in (self._btn_go, self._btn_relaunch,
@@ -5362,18 +5496,22 @@ class App(QMainWindow):
         menu.exec(self._cloud_tree.viewport().mapToGlobal(pos))
 
     def _cloud_delete_item(self, item):
+        """删除当前云扫描记录，并同步清理结果缓存。"""
         vals = tuple(item.text(i) for i in range(6))
         idx = self._cloud_tree.indexOfTopLevelItem(item)
         if idx >= 0:
             self._cloud_tree.takeTopLevelItem(idx)
         self._cloud_all_items = [v for v in self._cloud_all_items if tuple(str(x) for x in v) != vals]
         self._cloud_row_results.pop(id(item), None)
+        self._cloud_result_by_vals.pop(vals, None)
         self._cloud_update_status()
 
     def _cloud_show_result(self, name, result):
+        """在手动调用结果区展示选中云函数调用的返回内容。"""
         detail = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         c = _TH[self._tn]
         self._cloud_result.setHtml(f'<span style="color:{c["text1"]}">「{name}」返回结果:\n{detail}</span>')
+        self._update_cloud_result_actions()
 
     def _cloud_copy_result(self):
         """复制云函数手动调用或右键查看区域中的结果文本。"""
@@ -5384,14 +5522,26 @@ class App(QMainWindow):
         QApplication.clipboard().setText(text)
         self._log_add("info", "[云扫描] 已复制结果")
 
+    def _update_cloud_result_actions(self):
+        """根据结果区域内容更新云扫描结果复制按钮状态。"""
+        if hasattr(self, "_btn_cloud_copy_result"):
+            self._btn_cloud_copy_result.setEnabled(bool(self._cloud_result.toPlainText().strip()))
+
     def _cloud_update_status(self):
         """刷新云扫描记录计数和空状态提示。"""
         count = self._cloud_tree.topLevelItemCount()
         total = len(self._cloud_all_items)
+        kw = self._cloud_search_ent.text().strip() if hasattr(self, "_cloud_search_ent") else ""
         if count < total:
             self._cloud_status_lbl.setText(f"显示: {count} / {total} 条")
         else:
             self._cloud_status_lbl.setText(f"捕获: {count} 条")
+        if hasattr(self, "_cloud_filter_count_lbl"):
+            self._cloud_filter_count_lbl.setText(f"筛选: {count} / {total}" if kw else "")
+        if hasattr(self, "_btn_cloud_copy_visible"):
+            self._btn_cloud_copy_visible.setEnabled(count > 0)
+        if hasattr(self, "_btn_cloud_clear_search"):
+            self._btn_cloud_clear_search.setEnabled(bool(kw))
         if hasattr(self, "_cloud_empty_hint"):
             if count:
                 self._cloud_empty_hint.hide()
@@ -5403,16 +5553,41 @@ class App(QMainWindow):
                 self._cloud_empty_hint.show()
 
     def _cloud_filter(self):
+        """按关键字过滤云扫描记录，并保留每行的返回结果关联。"""
         kw = self._cloud_search_ent.text().strip().lower()
         self._cloud_tree.clear()
+        self._cloud_row_results.clear()
         for vals in self._cloud_all_items:
             if kw and not any(kw in str(v).lower() for v in vals):
                 continue
             item = QTreeWidgetItem([str(v) for v in vals])
             self._cloud_tree.addTopLevelItem(item)
+            result = self._cloud_result_by_vals.get(tuple(str(v) for v in vals))
+            if result is not None:
+                self._cloud_row_results[id(item)] = result
         self._cloud_update_status()
 
+    def _cloud_clear_search(self):
+        """清空云扫描记录搜索条件并恢复完整记录列表。"""
+        if hasattr(self, "_cloud_search_ent"):
+            self._cloud_search_ent.clear()
+        self._cloud_filter()
+
+    def _cloud_copy_visible_records(self):
+        """复制当前表格中可见的云扫描记录。"""
+        rows = []
+        headers = ["AppID", "类型", "名称", "参数", "状态", "时间"]
+        for i in range(self._cloud_tree.topLevelItemCount()):
+            item = self._cloud_tree.topLevelItem(i)
+            rows.append("\t".join(item.text(col) for col in range(6)))
+        if not rows:
+            self._log_add("warn", "[云扫描] 当前没有可复制的记录")
+            return
+        QApplication.clipboard().setText("\t".join(headers) + "\n" + "\n".join(rows))
+        self._log_add("info", f"[云扫描] 已复制 {len(rows)} 条记录")
+
     def _cloud_on_select(self, item):
+        """选中云扫描记录时，将函数名和参数同步到手动调用区域。"""
         if item and item.columnCount() >= 4:
             self._cloud_name_ent.setText(item.text(2))
             data_str = item.text(3).strip()
@@ -5506,27 +5681,38 @@ class App(QMainWindow):
             self._cld_q.put(("static_done",))
 
     def _cloud_do_clear(self):
+        """清空云扫描记录、结果缓存和界面筛选状态。"""
         self._cloud_tree.clear()
         self._cloud_all_items.clear()
         self._cloud_row_results.clear()
+        self._cloud_result_by_vals.clear()
+        if hasattr(self, "_cloud_search_ent"):
+            self._cloud_search_ent.clear()
+        if hasattr(self, "_cloud_result"):
+            self._cloud_result.clear()
+            self._update_cloud_result_actions()
         if self._auditor and self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._auditor.clear(), self._loop)
-        self._cloud_status_lbl.setText("捕获: 0 条")
+        self._cloud_update_status()
 
     def _cloud_do_call(self):
+        """校验手动调用参数，并向云扫描后台发起云函数调用。"""
         if not self._cloud_ensure_auditor():
             return
         name = self._cloud_name_ent.text().strip()
         if not name:
             self._cloud_result.setPlainText("请输入函数名")
+            self._update_cloud_result_actions()
             return
         try:
             data = json.loads(self._cloud_data_ent.text())
         except (json.JSONDecodeError, TypeError):
             self._cloud_result.setPlainText("参数 JSON 格式错误")
+            self._update_cloud_result_actions()
             return
         self._btn_cloud_call.setEnabled(False)
         self._cloud_result.setPlainText(f"正在调用 {name} ...")
+        self._update_cloud_result_actions()
         asyncio.run_coroutine_threadsafe(self._acloud_call(name, data), self._loop)
 
     async def _acloud_call(self, name, data):
@@ -5608,6 +5794,7 @@ class App(QMainWindow):
     def _apply_sts(self, sts):
         """更新主界面连接状态，并在小程序连接变化时触发相关后台动作。"""
         c = _TH[self._tn]
+        self._last_sts = dict(sts)
         is_connected = sts.get("miniapp", False)
         for key, (dot, lb, name) in self._dots.items():
             on = sts.get(key, False)
@@ -5645,6 +5832,7 @@ class App(QMainWindow):
         if is_connected:
             QTimer.singleShot(1500, lambda: self._delayed_stable_connect(gen_stable))
         self._miniapp_connected = is_connected
+        self._update_flow_steps(sts)
 
     def _handle_rte(self, item):
         kind = item[0]
@@ -5764,12 +5952,14 @@ class App(QMainWindow):
                     self._cloud_tree.addTopLevelItem(tree_item)
                     result_data = call.get("result") or call.get("error")
                     if result_data is not None:
-                        self._cloud_row_results[id(tree_item)] = {
+                        result_record = {
                             "status": status,
                             "result": call.get("result"),
                             "error": call.get("error"),
                             "data": call.get("data"),
                         }
+                        self._cloud_result_by_vals[tuple(str(v) for v in vals)] = result_record
+                        self._cloud_row_results[id(tree_item)] = result_record
                 self._cloud_tree.scrollToBottom()
                 self._cloud_update_status()
                 self._cloud_scan_lbl.setText(f"捕获中... {len(self._cloud_all_items)} 条")
@@ -5813,6 +6003,7 @@ class App(QMainWindow):
                 detail = json.dumps(res, ensure_ascii=False, default=str)
                 self._cloud_result.setHtml(
                     f'<span style="color:{c["warning"]}">{name} -> {detail}</span>')
+            self._update_cloud_result_actions()
 
     def _handle_ext(self, item):
         kind = item.get("type", "")
