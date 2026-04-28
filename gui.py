@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QProgressBar, QStackedWidget,
     QMenu, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog,
     QTabWidget, QTableWidget, QTableWidgetItem, QDialog, QSizePolicy,
-    QCheckBox, QGridLayout,
+    QCheckBox, QGridLayout, QComboBox,
 )
 
 from src.cli import CliOptions, CDP_PORT
@@ -329,6 +329,31 @@ def build_qss(tn):
     }}
     QLineEdit:focus {{
         border: 1px solid {c['accent']};
+    }}
+
+    QComboBox {{
+        background: {c['input']};
+        color: {c['text1']};
+        border: none;
+        border-radius: 10px;
+        padding: 6px 28px 6px 12px;
+        font-size: 10px;
+        min-width: 92px;
+    }}
+    QComboBox:focus {{
+        border: 1px solid {c['accent']};
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 24px;
+    }}
+    QComboBox QAbstractItemView {{
+        background: {c['input']};
+        color: {c['text1']};
+        border: 1px solid {c['border']};
+        selection-background-color: {c['accent']};
+        selection-color: #111118;
+        outline: 0;
     }}
 
     /* ── 文本框 ── */
@@ -753,6 +778,7 @@ class App(QMainWindow):
         self._mcp_permission_toggles = {}
         self._mcp_q = queue.Queue()
         self._log_q = queue.Queue()
+        self._log_entries = []
         self._sts_q = queue.Queue()
         self._rte_q = queue.Queue()
         self._cld_q = queue.Queue()
@@ -3225,13 +3251,35 @@ class App(QMainWindow):
         hdr = QHBoxLayout()
         hdr.addWidget(_make_label("日志输出", bold=True))
         hdr.addStretch()
-        self._btn_copy_logs = _make_btn("复制全部", self._copy_logs)
+        self._btn_copy_logs = _make_btn("复制当前", self._copy_logs)
         hdr.addWidget(self._btn_copy_logs)
-        self._btn_export_logs = _make_btn("导出日志", self._export_logs)
+        self._btn_export_logs = _make_btn("导出当前", self._export_logs)
         hdr.addWidget(self._btn_export_logs)
         self._btn_clear = _make_btn("清空", self._do_clear)
         hdr.addWidget(self._btn_clear)
         lc_lay.addLayout(hdr)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        filter_row.addWidget(QLabel("筛选"))
+        self._log_filter_ent = _make_entry("输入关键字过滤日志...")
+        self._log_filter_ent.textChanged.connect(self._render_logbox)
+        filter_row.addWidget(self._log_filter_ent, 1)
+        self._log_level_combo = QComboBox()
+        self._log_level_combo.addItem("全部级别", "")
+        for lv, label in (
+            ("info", "Info"),
+            ("warn", "Warn"),
+            ("error", "Error"),
+            ("debug", "Debug"),
+            ("frida", "Frida"),
+        ):
+            self._log_level_combo.addItem(label, lv)
+        self._log_level_combo.currentIndexChanged.connect(self._render_logbox)
+        filter_row.addWidget(self._log_level_combo)
+        self._btn_clear_log_filter = _make_btn("清除筛选", self._clear_log_filter)
+        filter_row.addWidget(self._btn_clear_log_filter)
+        lc_lay.addLayout(filter_row)
 
         self._logbox = QTextEdit()
         self._logbox.setReadOnly(True)
@@ -3345,6 +3393,8 @@ class App(QMainWindow):
                              self._mcp_running)
         self._update_mcp_debug_status()
         self._ext_refresh_custom_patterns()
+        self._render_control_logbox()
+        self._render_logbox()
         self._hl_sb()
         self._auto_save()
 
@@ -4305,9 +4355,8 @@ class App(QMainWindow):
             self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
 
     def _copy_logs(self):
-        """复制运行日志页面中的全部纯文本日志到剪贴板。"""
-        box = getattr(self, "_logbox", None)
-        text = box.toPlainText().strip() if box else ""
+        """复制当前筛选后的运行日志纯文本到剪贴板。"""
+        text = "\n".join(txt for _, txt in self._filtered_log_entries()).strip()
         if not text:
             self._log_add("warn", "[日志] 当前没有可复制的日志")
             return
@@ -4315,9 +4364,8 @@ class App(QMainWindow):
         self._log_add("info", "[日志] 已复制全部日志")
 
     def _export_logs(self):
-        """将运行日志页面中的全部纯文本日志导出到本地 txt 文件。"""
-        box = getattr(self, "_logbox", None)
-        text = box.toPlainText().strip() if box else ""
+        """将当前筛选后的运行日志纯文本导出到本地 txt 文件。"""
+        text = "\n".join(txt for _, txt in self._filtered_log_entries()).strip()
         if not text:
             self._log_add("warn", "[日志] 当前没有可导出的日志")
             return
@@ -4334,6 +4382,7 @@ class App(QMainWindow):
 
     def _do_clear(self):
         """清空控制台和运行日志页面中的日志内容。"""
+        self._log_entries.clear()
         if hasattr(self, "_logbox"):
             self._logbox.clear()
         if hasattr(self, "_control_logbox"):
@@ -4341,7 +4390,25 @@ class App(QMainWindow):
 
     _LOG_MAX_BLOCKS = 500  # 最多保留的日志行数
 
-    def _log_add(self, lv, txt):
+    def _filtered_log_entries(self):
+        """返回符合运行日志页当前关键字和级别筛选条件的日志记录。"""
+        kw = ""
+        if hasattr(self, "_log_filter_ent"):
+            kw = self._log_filter_ent.text().strip().lower()
+        lv_filter = ""
+        if hasattr(self, "_log_level_combo"):
+            lv_filter = self._log_level_combo.currentData() or ""
+        out = []
+        for lv, txt in self._log_entries:
+            if lv_filter and lv != lv_filter:
+                continue
+            if kw and kw not in txt.lower():
+                continue
+            out.append((lv, txt))
+        return out
+
+    def _log_html(self, lv, txt):
+        """按当前主题将单条日志转换为 QTextEdit 可显示的 HTML。"""
         c = _TH[self._tn]
         color_map = {
             "info": c["text2"],
@@ -4351,24 +4418,81 @@ class App(QMainWindow):
             "warn": c["warning"],
         }
         color = color_map.get(lv, c["text2"])
-        html = f'<span style="color:{color}">{txt}</span>'
-        for box_name in ("_logbox", "_control_logbox"):
-            box = getattr(self, box_name, None)
-            if box is None:
-                continue
-            box.append(html)
-            # 限制日志行数，防止 QTextEdit 内容过多导致 UI 卡顿
-            doc = box.document()
-            overflow = doc.blockCount() - self._LOG_MAX_BLOCKS
-            if overflow > 50:  # 攒够 50 行再批量删，减少操作频率
-                cursor = box.textCursor()
-                cursor.movePosition(cursor.MoveOperation.Start)
-                for _ in range(overflow):
-                    cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
-                cursor.removeSelectedText()
-                cursor.deleteChar()  # 删掉残留空行
-            sb = box.verticalScrollBar()
-            sb.setValue(sb.maximum())
+        return f'<span style="color:{color}">{txt}</span>'
+
+    def _render_logbox(self):
+        """根据当前筛选条件重绘运行日志页面，不影响控制台日志。"""
+        box = getattr(self, "_logbox", None)
+        if box is None:
+            return
+        box.setUpdatesEnabled(False)
+        box.clear()
+        for lv, txt in self._filtered_log_entries():
+            box.append(self._log_html(lv, txt))
+        box.setUpdatesEnabled(True)
+        sb = box.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _render_control_logbox(self):
+        """按当前主题重绘控制台日志，保持控制台日志始终显示全量记录。"""
+        box = getattr(self, "_control_logbox", None)
+        if box is None:
+            return
+        box.setUpdatesEnabled(False)
+        box.clear()
+        for lv, txt in self._log_entries:
+            box.append(self._log_html(lv, txt))
+        box.setUpdatesEnabled(True)
+        sb = box.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _clear_log_filter(self):
+        """清空运行日志页面的关键字和级别筛选条件。"""
+        if hasattr(self, "_log_filter_ent"):
+            self._log_filter_ent.clear()
+        if hasattr(self, "_log_level_combo"):
+            self._log_level_combo.setCurrentIndex(0)
+        self._render_logbox()
+
+    def _log_add(self, lv, txt):
+        """记录一条日志，并同步更新控制台日志与运行日志页面。"""
+        self._log_entries.append((lv, txt))
+        if len(self._log_entries) > self._LOG_MAX_BLOCKS:
+            self._log_entries = self._log_entries[-self._LOG_MAX_BLOCKS:]
+
+        control_box = getattr(self, "_control_logbox", None)
+        if control_box is not None:
+            self._append_log_html(control_box, self._log_html(lv, txt))
+
+        if self._log_matches_filter(lv, txt):
+            log_box = getattr(self, "_logbox", None)
+            if log_box is not None:
+                self._append_log_html(log_box, self._log_html(lv, txt))
+
+    def _log_matches_filter(self, lv, txt):
+        """判断单条日志是否符合运行日志页的当前筛选条件。"""
+        kw = self._log_filter_ent.text().strip().lower() if hasattr(self, "_log_filter_ent") else ""
+        lv_filter = self._log_level_combo.currentData() if hasattr(self, "_log_level_combo") else ""
+        if lv_filter and lv != lv_filter:
+            return False
+        if kw and kw not in txt.lower():
+            return False
+        return True
+
+    def _append_log_html(self, box, html):
+        """向日志框追加 HTML，并限制 QTextEdit 文档行数。"""
+        box.append(html)
+        doc = box.document()
+        overflow = doc.blockCount() - self._LOG_MAX_BLOCKS
+        if overflow > 50:
+            cursor = box.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            for _ in range(overflow):
+                cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()
+        sb = box.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _do_start(self):
         """按控制台配置启动调试引擎，并生成 DevTools 连接地址。"""
