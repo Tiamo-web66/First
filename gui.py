@@ -17,7 +17,9 @@ from PySide6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QRect,
     Signal, QPoint, QUrl,
 )
-from PySide6.QtGui import QPainter, QColor, QFont, QIcon, QPixmap, QDesktopServices
+from PySide6.QtGui import (
+    QPainter, QColor, QFont, QIcon, QPixmap, QDesktopServices, QFontDatabase,
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QFrame, QPushButton, QScrollArea, QTextEdit,
@@ -39,33 +41,49 @@ from src.mcp_server import McpHttpService
 #  配色
 # ══════════════════════════════════════════
 _D = dict(
-    bg="#1c1c24",       card="#262632",     input="#181820",
-    sidebar="#111118",  sb_hover="#1c1c28", sb_active="#222232",
-    border="#303040",   border2="#3a3a4c",
-    text1="#e8e8f0",    text2="#8888a0",    text3="#5c5c6c",   text4="#3c3c4c",
-    accent="#4ade80",   accent2="#22c55e",
-    success="#4ade80",  error="#f87171",    warning="#fbbf24",
+    bg="#0e1118",       card="#111827",     input="#1d2536",
+    sidebar="#111827",  sb_hover="#1d2536", sb_active="#253554",
+    border="#2b3650",   border2="#34415f",
+    text1="#f7f9ff",    text2="#c3ccdd",    text3="#8d99ad",   text4="#4b5872",
+    accent="#7aa2ff",   accent2="#5d87ec",
+    success="#5de4a7",  error="#ff7a7a",    warning="#ffbd2e",
 )
 _L = dict(
-    bg="#f2f2f6",       card="#ffffff",     input="#eeeef2",
-    sidebar="#ffffff",  sb_hover="#f2f2f6", sb_active="#e6e6ea",
-    border="#d8d8dc",   border2="#c8c8cc",
-    text1="#1a1a22",    text2="#6e6e78",    text3="#9e9ea8",   text4="#c0c0c8",
-    accent="#16a34a",   accent2="#15803d",
+    bg="#f4f7fb",       card="#ffffff",     input="#f6f8fc",
+    sidebar="#f8fafd",  sb_hover="#eef4ff", sb_active="#eaf1ff",
+    border="#e2e8f0",   border2="#d7dfeb",
+    text1="#172033",    text2="#4d5c73",    text3="#8a96a9",   text4="#c7d1df",
+    accent="#2f6fed",   accent2="#1f5fd3",
     success="#16a34a",  error="#dc2626",    warning="#ca8a04",
 )
 _TH = {"dark": _D, "light": _L}
 _FN = "Microsoft YaHei UI"
 _FM = "Consolas"
+
+
+def _install_app_font():
+    """加载 Windows 中文字体，避免 Qt 字体回退失败导致中文显示为方块。"""
+    global _FN
+    for path in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf"):
+        if not os.path.exists(path):
+            continue
+        fid = QFontDatabase.addApplicationFont(path)
+        if fid < 0:
+            continue
+        families = QFontDatabase.applicationFontFamilies(fid)
+        if families:
+            _FN = families[0]
+            return
 _MENU = [
-    ("control",   "◉", "控制台"),
-    ("navigator", "⬡", "路由导航"),
-    ("hook",      "◈", "Hook"),
-    ("cloud",     "☁", "云扫描"),
+    ("control",   "控", "控制台"),
+    ("navigator", "路", "路由导航"),
+    ("hook",      "H", "Hook"),
+    ("cloud",     "云", "云扫描"),
     ("mcp",       "M", "MCP"),
-    ("extract",   "◆", "敏感信息提取"),
-    ("vconsole",  "◇", "调试开关"),
-    ("logs",      "≡", "运行日志"),
+    ("extract",   "敏", "敏感信息提取"),
+    ("vconsole",  "调", "调试开关"),
+    ("logs",      "志", "运行日志"),
+    ("faq",       "?", "常见问题"),
 ]
 _MCP_PERMISSIONS = [
     ("read_status", "读取状态", True),
@@ -134,7 +152,7 @@ def build_qss(tn):
     }}
     QLabel#sb_logo {{
         color: {c['text1']};
-        font-size: 13px; font-weight: bold;
+        font-size: 24px; font-weight: bold;
         background: transparent;
     }}
     QFrame#sb_hline {{
@@ -142,9 +160,10 @@ def build_qss(tn):
         max-height: 1px; min-height: 1px;
     }}
     QLabel#sb_theme {{
-        color: {c['text3']};
+        color: {c['text2']};
         background: transparent;
-        padding: 4px 12px;
+        padding: 8px 12px;
+        border-radius: 14px;
     }}
     QLabel#sb_theme:hover {{
         color: {c['text1']};
@@ -194,16 +213,50 @@ def build_qss(tn):
     /* ── 标题 ── */
     QLabel#page_title {{
         color: {c['text1']};
-        font-size: 17px; font-weight: bold;
-        padding-left: 24px;
+        font-size: 18px; font-weight: bold;
+        padding-left: 28px;
         background: transparent;
+    }}
+
+    QFrame#top_bar {{
+        background: {c['card']};
+        border-radius: 16px;
+        border: 1px solid {c['border']};
+    }}
+    QFrame#target_badge {{
+        background: {c['input']};
+        border-radius: 16px;
+        border: 1px solid {c['border']};
+    }}
+    QLabel#target_badge_label {{
+        color: {c['text3']};
+        font-size: 10px;
+        font-weight: bold;
+    }}
+    QLabel#target_badge_value {{
+        color: {c['text1']};
+        font-size: 11px;
+        font-weight: bold;
+    }}
+    QLabel#target_badge_meta {{
+        color: {c['text3']};
+        font-size: 10px;
+        font-weight: bold;
+    }}
+    QLabel#target_badge_status {{
+        color: {c['success']};
+        background: {"#183527" if tn == "dark" else "#eaf7ef"};
+        border-radius: 10px;
+        padding: 2px 10px;
+        font-size: 10px;
+        font-weight: bold;
     }}
 
     /* ── 圆角卡片 ── */
     QFrame.card {{
         background: {c['card']};
-        border-radius: 12px;
-        border: none;
+        border-radius: 16px;
+        border: 1px solid {c['border']};
     }}
     QFrame.card QLabel {{
         background: transparent;
@@ -657,13 +710,14 @@ def _make_entry(placeholder="", width=None):
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
+        _install_app_font()
         self._os_tag = "macOS" if sys.platform == "darwin" else "Windows"
         self.setWindowTitle(f"First-{self._os_tag}")
         _ico = os.path.join(_BASE_DIR, "icon.png")
         if os.path.exists(_ico):
             self.setWindowIcon(QIcon(_ico))
-        self.resize(960, 700)
-        self.setMinimumSize(780, 500)
+        self.resize(1160, 760)
+        self.setMinimumSize(920, 640)
 
         self._cfg = _load_cfg()
         self._tn = self._cfg.get("theme", "dark")
@@ -691,6 +745,8 @@ class App(QMainWindow):
         self._mcp_endpoint = self._cfg.get("mcp_endpoint", "http://127.0.0.1:8765/mcp")
         self._mcp_appid = ""
         self._mcp_route = ""
+        self._current_app_name = ""
+        self._current_app_id = ""
         self._mcp_service = None
         self._mcp_permissions = {k: default for k, _, default in _MCP_PERMISSIONS}
         self._mcp_permissions.update(self._cfg.get("mcp_permissions", {}))
@@ -737,35 +793,25 @@ class App(QMainWindow):
         # ── 侧栏 ──
         self._sb = QFrame()
         self._sb.setObjectName("sidebar")
-        self._sb.setFixedWidth(180)
+        self._sb.setFixedWidth(224)
         sb_lay = QVBoxLayout(self._sb)
         sb_lay.setContentsMargins(0, 0, 0, 0)
         sb_lay.setSpacing(0)
 
         sb_head = QFrame()
         sb_head.setObjectName("sb_head")
-        sb_head.setFixedHeight(90)
+        sb_head.setFixedHeight(112)
         sb_head_lay = QVBoxLayout(sb_head)
-        sb_head_lay.addStretch()
+        sb_head_lay.setContentsMargins(26, 22, 20, 14)
+        sb_head_lay.setSpacing(4)
 
-        logo_row = QHBoxLayout()
-        logo_row.setContentsMargins(0, 0, 0, 0)
-        logo_row.setSpacing(6)
-        logo_row.addStretch()
-        _ico_path = os.path.join(_BASE_DIR, "icon.png")
-        if os.path.exists(_ico_path):
-            _ico_lbl = QLabel()
-            _pix = QPixmap(_ico_path).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            _ico_lbl.setPixmap(_pix)
-            _ico_lbl.setFixedSize(20, 20)
-            logo_row.addWidget(_ico_lbl)
-        self._sb_logo = QLabel(f"First-{self._os_tag}")
+        self._sb_logo = QLabel("First")
         self._sb_logo.setObjectName("sb_logo")
-        logo_row.addWidget(self._sb_logo)
-        logo_row.addStretch()
-        sb_head_lay.addLayout(logo_row)
-
-        sb_head_lay.addStretch()
+        sb_head_lay.addWidget(self._sb_logo)
+        sb_desc = QLabel("小程序安全调试工具")
+        sb_desc.setProperty("class", "muted")
+        sb_desc.setFont(QFont(_FN, 9))
+        sb_head_lay.addWidget(sb_desc)
         sb_lay.addWidget(sb_head)
 
         hline = QFrame()
@@ -775,8 +821,8 @@ class App(QMainWindow):
 
         sb_nav = QWidget()
         sb_nav_lay = QVBoxLayout(sb_nav)
-        sb_nav_lay.setContentsMargins(8, 10, 8, 10)
-        sb_nav_lay.setSpacing(2)
+        sb_nav_lay.setContentsMargins(16, 10, 16, 10)
+        sb_nav_lay.setSpacing(5)
         for pid, icon, name in _MENU:
             row = QFrame()
             row.setCursor(Qt.PointingHandCursor)
@@ -798,49 +844,32 @@ class App(QMainWindow):
         sb_nav_lay.addStretch()
         sb_lay.addWidget(sb_nav, 1)
 
-        # 侧栏小程序信息卡片
-        sb_app_card = QFrame()
-        sb_app_card.setStyleSheet(
-            "QFrame { background: rgba(128,128,128,0.08); border-radius: 8px; }"
-            "QLabel { background: transparent; }")
-        sb_app_card_lay = QVBoxLayout(sb_app_card)
-        sb_app_card_lay.setContentsMargins(8, 6, 8, 6)
-        sb_app_card_lay.setSpacing(1)
-        self._sb_app_name = QLabel("未连接")
-        self._sb_app_name.setAlignment(Qt.AlignCenter)
-        self._sb_app_name.setFont(QFont(_FN, 8))
-        self._sb_app_name.setStyleSheet("color: #5c5c6c;")
-        self._sb_app_name.setWordWrap(True)
-        sb_app_card_lay.addWidget(self._sb_app_name)
-        self._sb_app_id = QLabel("")
-        self._sb_app_id.setAlignment(Qt.AlignCenter)
-        self._sb_app_id.setFont(QFont(_FN, 8))
-        self._sb_app_id.setStyleSheet("color: #9e9ea8;")
-        self._sb_app_id.setVisible(False)
-        self._sb_app_id.setWordWrap(True)
-        sb_app_card_lay.addWidget(self._sb_app_id)
-        sb_lay.addWidget(sb_app_card)
-        sb_lay.addSpacing(4)
-
         self._sb_theme = QLabel()
         self._sb_theme.setObjectName("sb_theme")
         self._sb_theme.setAlignment(Qt.AlignCenter)
         self._sb_theme.setCursor(Qt.PointingHandCursor)
         self._sb_theme.setFont(QFont(_FN, 9))
         self._sb_theme.mousePressEvent = lambda e: self._toggle_theme()
-        sb_lay.addWidget(self._sb_theme)
+        sb_lay.addSpacing(8)
+        theme_wrap = QWidget()
+        theme_lay = QHBoxLayout(theme_wrap)
+        theme_lay.setContentsMargins(16, 0, 16, 0)
+        theme_lay.addWidget(self._sb_theme)
+        sb_lay.addWidget(theme_wrap)
 
-        sb_author = QLabel("by TiAmo")
-        sb_author.setObjectName("sb_theme")
-        sb_author.setAlignment(Qt.AlignCenter)
-        sb_author.setFont(QFont(_FN, 8))
-        sb_lay.addWidget(sb_author)
-        sb_ver = QLabel("v1.0")
-        sb_ver.setObjectName("sb_theme")
-        sb_ver.setAlignment(Qt.AlignCenter)
-        sb_ver.setFont(QFont(_FN, 7))
-        sb_lay.addWidget(sb_ver)
-        sb_lay.addSpacing(12)
+        self._sb_author = QLabel("作者: TiAmo")
+        self._sb_author.setObjectName("sb_theme")
+        self._sb_author.setAlignment(Qt.AlignLeft)
+        self._sb_author.setFont(QFont(_FN, 8))
+        self._sb_author.setContentsMargins(26, 0, 0, 0)
+        sb_lay.addWidget(self._sb_author)
+        self._sb_version = QLabel("当前版本: v1.0.0")
+        self._sb_version.setObjectName("sb_theme")
+        self._sb_version.setAlignment(Qt.AlignLeft)
+        self._sb_version.setFont(QFont(_FN, 8))
+        self._sb_version.setContentsMargins(26, 0, 0, 0)
+        sb_lay.addWidget(self._sb_version)
+        sb_lay.addSpacing(16)
         self._update_theme_label()
 
         root_h.addWidget(self._sb)
@@ -856,14 +885,39 @@ class App(QMainWindow):
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(0)
 
-        hdr_frame = QWidget()
-        hdr_frame.setFixedHeight(60)
+        hdr_frame = QFrame()
+        hdr_frame.setObjectName("top_bar")
+        hdr_frame.setFixedHeight(56)
         hdr_lay = QHBoxLayout(hdr_frame)
-        hdr_lay.setContentsMargins(0, 0, 0, 0)
+        hdr_lay.setContentsMargins(0, 0, 12, 0)
         self._hdr_title = QLabel("")
         self._hdr_title.setObjectName("page_title")
         hdr_lay.addWidget(self._hdr_title)
         hdr_lay.addStretch()
+        self._target_badge = QFrame()
+        self._target_badge.setObjectName("target_badge")
+        self._target_badge.setFixedHeight(34)
+        target_lay = QHBoxLayout(self._target_badge)
+        target_lay.setContentsMargins(14, 0, 10, 0)
+        target_lay.setSpacing(12)
+        self._target_hook_lbl = QLabel("Hook")
+        self._target_hook_lbl.setObjectName("target_badge_label")
+        target_lay.addWidget(self._target_hook_lbl)
+        self._target_name_lbl = QLabel("未连接小程序")
+        self._target_name_lbl.setObjectName("target_badge_value")
+        self._target_name_lbl.setMinimumWidth(110)
+        target_lay.addWidget(self._target_name_lbl)
+        self._target_appid_lbl = QLabel("AppID --")
+        self._target_appid_lbl.setObjectName("target_badge_meta")
+        self._target_appid_lbl.setMinimumWidth(130)
+        target_lay.addWidget(self._target_appid_lbl)
+        self._target_cdp_lbl = QLabel("CDP --")
+        self._target_cdp_lbl.setObjectName("target_badge_meta")
+        target_lay.addWidget(self._target_cdp_lbl)
+        self._target_status_lbl = QLabel("未连接")
+        self._target_status_lbl.setObjectName("target_badge_status")
+        target_lay.addWidget(self._target_status_lbl)
+        hdr_lay.addWidget(self._target_badge)
         right_lay.addWidget(hdr_frame)
 
         hdr_line = QFrame()
@@ -883,6 +937,8 @@ class App(QMainWindow):
         self._build_extract()
         self._build_vconsole()
         self._build_logs()
+        self._build_faq()
+        self._update_target_badge(False)
 
     # ── 控制台 ──
 
@@ -890,55 +946,55 @@ class App(QMainWindow):
         """构建主控制台页面，提供连接参数、断点策略和运行状态。"""
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 8, 24, 8)
-        lay.setSpacing(6)
-        lay.setAlignment(Qt.AlignTop)
+        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setSpacing(14)
 
-        # Card 1: 连接设置
+        top_row = QHBoxLayout()
+        top_row.setSpacing(14)
+
+        # Card 1: 启动调试流程
         c1 = _make_card()
         c1_lay = QVBoxLayout(c1)
-        c1_lay.setContentsMargins(16, 10, 16, 10)
-        c1_lay.setSpacing(6)
-        c1_lay.addWidget(_make_label("连接设置", bold=True))
+        c1_lay.setContentsMargins(18, 14, 18, 14)
+        c1_lay.setSpacing(10)
+        c1_lay.addWidget(_make_label("启动调试流程", bold=True))
+        flow_tip = QLabel("先启动调试，再打开小程序；连接稳定后可自动或手动注入 Hook。")
+        flow_tip.setProperty("class", "muted")
+        flow_tip.setWordWrap(True)
+        c1_lay.addWidget(flow_tip)
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("CDP 端口"))
         self._cp_ent = _make_entry(width=100)
         self._cp_ent.setText(str(self._cfg.get("cdp_port", CDP_PORT)))
-        self._cp_ent.textChanged.connect(lambda: self._auto_save())
+        self._cp_ent.textChanged.connect(lambda: (self._auto_save(), self._update_target_badge()))
         row1.addWidget(self._cp_ent)
-        row1.addStretch()
-        c1_lay.addLayout(row1)
-
-        bp_row = QHBoxLayout()
+        row1.addSpacing(16)
         self._tog_devtools_bp = ToggleSwitch(self._cfg.get("allow_devtools_breakpoints", False))
         self._tog_devtools_bp.toggled.connect(self._on_devtools_breakpoints_toggled)
-        bp_row.addWidget(self._tog_devtools_bp)
-        bp_row.addWidget(QLabel("允许 DevTools 断点"))
-        bp_row.addSpacing(16)
+        row1.addWidget(self._tog_devtools_bp)
+        row1.addWidget(QLabel("允许 DevTools 断点"))
+        row1.addSpacing(12)
         self._devtools_bp_status_lbl = QLabel("")
         self._devtools_bp_status_lbl.setProperty("class", "muted")
-        bp_row.addWidget(self._devtools_bp_status_lbl)
-        bp_row.addStretch()
-        c1_lay.addLayout(bp_row)
+        row1.addWidget(self._devtools_bp_status_lbl)
+        row1.addStretch()
+        c1_lay.addLayout(row1)
         self._refresh_devtools_breakpoint_status()
 
-        lay.addWidget(c1)
-
-        # Action row
         ar = QHBoxLayout()
-        self._btn_start = _make_btn("▶  启动调试", self._do_start)
+        self._btn_start = _make_btn("启动调试", self._do_start)
         self._btn_start.setFont(QFont(_FN, 10, QFont.Bold))
         ar.addWidget(self._btn_start)
-        self._btn_stop = _make_btn("■  停止", self._do_stop)
+        self._btn_stop = _make_btn("停止", self._do_stop)
         self._btn_stop.setFont(QFont(_FN, 10, QFont.Bold))
         self._btn_stop.setEnabled(False)
         ar.addWidget(self._btn_stop)
         ar.addStretch()
-        lay.addLayout(ar)
+        c1_lay.addLayout(ar)
 
-        # DevTools URL
         dt_row = QHBoxLayout()
+        dt_row.addWidget(QLabel("DevTools"))
         self._devtools_lbl = QLabel("")
         self._devtools_lbl.setProperty("class", "accent")
         self._devtools_lbl.setFont(QFont(_FM, 8))
@@ -950,14 +1006,32 @@ class App(QMainWindow):
         self._devtools_copy_hint.setFont(QFont(_FN, 8))
         dt_row.addWidget(self._devtools_copy_hint)
         dt_row.addStretch()
-        lay.addLayout(dt_row)
+        c1_lay.addLayout(dt_row)
+        top_row.addWidget(c1, 3)
 
-        # Card 3: 运行状态
+        ctx_card = _make_card()
+        ctx_lay = QVBoxLayout(ctx_card)
+        ctx_lay.setContentsMargins(18, 14, 18, 14)
+        ctx_lay.setSpacing(8)
+        ctx_lay.addWidget(_make_label("当前小程序上下文", bold=True))
+        self._appname_lbl = QLabel("应用: --")
+        self._appname_lbl.setProperty("class", "bold")
+        ctx_lay.addWidget(self._appname_lbl)
+        self._app_lbl = QLabel("AppID: --")
+        self._app_lbl.setProperty("class", "muted")
+        ctx_lay.addWidget(self._app_lbl)
+        self._control_route_lbl = QLabel("当前路由: --")
+        self._control_route_lbl.setProperty("class", "muted")
+        ctx_lay.addWidget(self._control_route_lbl)
+        ctx_lay.addStretch()
+        top_row.addWidget(ctx_card, 2)
+        lay.addLayout(top_row)
+
+        # Card 2: 运行状态条
         c3 = _make_card()
-        c3_lay = QVBoxLayout(c3)
-        c3_lay.setContentsMargins(16, 10, 16, 10)
-        c3_lay.setSpacing(2)
-        c3_lay.addWidget(_make_label("运行状态", bold=True))
+        c3_lay = QHBoxLayout(c3)
+        c3_lay.setContentsMargins(18, 12, 18, 12)
+        c3_lay.setSpacing(18)
         self._dots = {}
         for key, name in [("frida", "Frida"), ("miniapp", "小程序"), ("devtools", "DevTools")]:
             dr = QHBoxLayout()
@@ -968,39 +1042,30 @@ class App(QMainWindow):
             dr.addStretch()
             c3_lay.addLayout(dr)
             self._dots[key] = (dot, lb, name)
-        self._app_lbl = QLabel("应用: --")
-        self._app_lbl.setProperty("class", "muted")
-        c3_lay.addWidget(self._app_lbl)
-        self._appname_lbl = QLabel("")
-        self._appname_lbl.setProperty("class", "muted")
-        self._appname_lbl.setVisible(False)
-        c3_lay.addWidget(self._appname_lbl)
+        self._control_mcp_status_lbl = QLabel("MCP: 未启动")
+        self._control_mcp_status_lbl.setProperty("class", "muted")
+        c3_lay.addWidget(self._control_mcp_status_lbl)
+        c3_lay.addStretch()
         lay.addWidget(c3)
+
+        log_card = _make_card()
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(16, 12, 16, 12)
+        log_lay.setSpacing(8)
+        log_hdr = QHBoxLayout()
+        log_hdr.addWidget(_make_label("运行日志", bold=True))
+        log_hdr.addStretch()
+        self._btn_control_clear = _make_btn("清空", self._do_clear)
+        log_hdr.addWidget(self._btn_control_clear)
+        log_lay.addLayout(log_hdr)
+        self._control_logbox = QTextEdit()
+        self._control_logbox.setReadOnly(True)
+        self._control_logbox.setFont(QFont(_FM, 9))
+        log_lay.addWidget(self._control_logbox, 1)
+        lay.addWidget(log_card, 1)
 
         self._stack.addWidget(page)
         self._page_map["control"] = self._stack.count() - 1
-
-        # Card 4: 常见问题解决方案
-        c4 = _make_card()
-        c4_lay = QVBoxLayout(c4)
-        c4_lay.setContentsMargins(16, 10, 16, 10)
-        c4_lay.setSpacing(8)
-        c4_lay.addWidget(_make_label("常见问题解决方案", bold=True))
-
-        faq_items = [
-            ("Frida 连接失败", "请确认当前版本是否在WMPF版本区间内,如无法解决建议安装建议版本。"),
-            ("DevTools 打开内容为空", "点击启动调试前请勿打开小程序, 启动调试打开后再次启动小程序即可。"),
-            (r"Frida 已显示连接，但小程序端显示未连接或步骤确认没问题且无法断点", r"若操作顺序无误，建议先彻底卸载微信并重启电脑-·如有重要聊天记录请提前备份·-。删除路径C:\Users\用户名\AppData\Roaming\Tencent\xwechat\XPlugin\Plugins\RadiumWMPF下所有以数字命名的文件夹,再次重启电脑后,安装微信 4.1.0.30 版本。安装完成后检查上述路径，确认文件夹编号为 16389。"),
-        ]
-
-        for title, solution in faq_items:
-            item_lbl = QLabel(f"• {title}\n   {solution}")
-            item_lbl.setWordWrap(True)
-            item_lbl.setStyleSheet("color: #FFC107;")
-            c4_lay.addWidget(item_lbl)
-
-        c4_lay.addStretch()
-        lay.addWidget(c4)
 
     # ── 路由导航 ──
 
@@ -2808,11 +2873,11 @@ class App(QMainWindow):
         op_lay.addWidget(_make_label("操作", bold=True))
 
         btn_row = QHBoxLayout()
-        self._btn_vc_enable = _make_btn("▶  开启调试", self._do_vc_enable)
+        self._btn_vc_enable = _make_btn("开启调试", self._do_vc_enable)
         self._btn_vc_enable.setFont(QFont(_FN, 10, QFont.Bold))
         self._btn_vc_enable.setEnabled(False)
         btn_row.addWidget(self._btn_vc_enable)
-        self._btn_vc_disable = _make_btn("■  关闭调试", self._do_vc_disable)
+        self._btn_vc_disable = _make_btn("关闭调试", self._do_vc_disable)
         self._btn_vc_disable.setFont(QFont(_FN, 10, QFont.Bold))
         self._btn_vc_disable.setEnabled(False)
         btn_row.addWidget(self._btn_vc_disable)
@@ -2968,6 +3033,43 @@ class App(QMainWindow):
         self._stack.addWidget(page)
         self._page_map["logs"] = self._stack.count() - 1
 
+    def _build_faq(self):
+        """构建常见问题页面，承载原控制台中的问题解决方案。"""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setSpacing(12)
+
+        intro = QLabel("以下内容用于排查启动调试、Frida 连接和 DevTools 空白等常见问题。")
+        intro.setProperty("class", "muted")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        faq_items = [
+            ("Frida 连接失败", "请确认当前版本是否在 WMPF 版本区间内，如无法解决建议安装推荐版本。"),
+            ("DevTools 打开内容为空", "点击启动调试前请勿打开小程序；启动调试后再次打开小程序即可。"),
+            (
+                "Frida 已显示连接，但小程序端显示未连接或无法断点",
+                r"若操作顺序无误，建议先彻底卸载微信并重启电脑。删除路径 C:\Users\用户名\AppData\Roaming\Tencent\xwechat\XPlugin\Plugins\RadiumWMPF 下所有以数字命名的文件夹，再次重启电脑后安装微信 4.1.0.30 版本。安装完成后检查上述路径，确认文件夹编号为 16389。",
+            ),
+        ]
+
+        for title, solution in faq_items:
+            card = _make_card()
+            card_lay = QVBoxLayout(card)
+            card_lay.setContentsMargins(18, 14, 18, 14)
+            card_lay.setSpacing(8)
+            card_lay.addWidget(_make_label(title, bold=True))
+            content = QLabel(solution)
+            content.setProperty("class", "muted")
+            content.setWordWrap(True)
+            card_lay.addWidget(content)
+            lay.addWidget(card)
+
+        lay.addStretch()
+        self._stack.addWidget(page)
+        self._page_map["faq"] = self._stack.count() - 1
+
     # ──────────────────────────────────
     #  页面切换
     # ──────────────────────────────────
@@ -3012,7 +3114,7 @@ class App(QMainWindow):
         self._auto_save()
 
     def _update_theme_label(self):
-        txt = "☀  浅色模式" if self._tn == "dark" else "☽  深色模式"
+        txt = "日  浅色模式" if self._tn == "light" else "月  深色模式"
         self._sb_theme.setText(txt)
 
     def _update_toggle_colors(self):
@@ -3025,13 +3127,28 @@ class App(QMainWindow):
             tog.set_colors(c["accent"], c["text4"])
 
     def _refresh_sb_app_card(self):
-        """主题切换时刷新侧栏小程序卡片颜色。"""
+        """主题切换时刷新顶部 Hook 目标信息条。"""
+        self._update_target_badge()
+
+    def _update_target_badge(self, connected=None):
+        """刷新顶部当前 Hook 小程序、AppID、CDP 端口和连接状态。"""
+        if not hasattr(self, "_target_name_lbl"):
+            return
         c = _TH[self._tn]
-        if self._sb_app_id.isVisible():
-            self._sb_app_name.setStyleSheet(f"color: {c['success']};")
-            self._sb_app_id.setStyleSheet(f"color: {c['success']};")
-        else:
-            self._sb_app_name.setStyleSheet(f"color: {c['text3']};")
+        is_connected = self._miniapp_connected if connected is None else bool(connected)
+        app_name = self._current_app_name or "未连接小程序"
+        app_id = self._current_app_id or "--"
+        self._target_hook_lbl.setText("Hook")
+        self._target_hook_lbl.setStyleSheet(f"color: {c['success'] if is_connected else c['text3']};")
+        self._target_name_lbl.setText(app_name)
+        self._target_appid_lbl.setText(f"AppID {app_id}")
+        self._target_cdp_lbl.setText(f"CDP :{self._cp_ent.text() if hasattr(self, '_cp_ent') else '--'}")
+        self._target_status_lbl.setText("已连接" if is_connected else "未连接")
+        self._target_status_lbl.setStyleSheet(
+            f"color: {c['success'] if is_connected else c['text3']};"
+            f"background: {'#183527' if self._tn == 'dark' and is_connected else '#263044' if self._tn == 'dark' else '#eaf7ef' if is_connected else '#f3f6fb'};"
+            "border-radius: 10px; padding: 2px 10px; font-size: 10px; font-weight: bold;"
+        )
 
     def _auto_save(self):
         """保存 GUI 的主题、调试开关、提取配置和 MCP 权限配置。"""
@@ -3073,6 +3190,9 @@ class App(QMainWindow):
         self._btn_mcp_start.setEnabled(not running)
         self._btn_mcp_stop.setEnabled(running)
         self._btn_mcp_restart.setEnabled(running)
+        if hasattr(self, "_control_mcp_status_lbl"):
+            self._control_mcp_status_lbl.setText(f"MCP: {text}")
+            self._control_mcp_status_lbl.setStyleSheet(f"color: {c['success'] if running else c['text2']};")
 
     def _mcp_add_log(self, text):
         """Append one MCP log line to the MCP page log box."""
@@ -3950,7 +4070,10 @@ class App(QMainWindow):
             self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
 
     def _do_clear(self):
-        self._logbox.clear()
+        if hasattr(self, "_logbox"):
+            self._logbox.clear()
+        if hasattr(self, "_control_logbox"):
+            self._control_logbox.clear()
 
     _LOG_MAX_BLOCKS = 500  # 最多保留的日志行数
 
@@ -3964,19 +4087,24 @@ class App(QMainWindow):
             "warn": c["warning"],
         }
         color = color_map.get(lv, c["text2"])
-        self._logbox.append(f'<span style="color:{color}">{txt}</span>')
-        # 限制日志行数，防止 QTextEdit 内容过多导致 UI 卡顿
-        doc = self._logbox.document()
-        overflow = doc.blockCount() - self._LOG_MAX_BLOCKS
-        if overflow > 50:  # 攒够 50 行再批量删，减少操作频率
-            cursor = self._logbox.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            for _ in range(overflow):
-                cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-            cursor.deleteChar()  # 删掉残留空行
-        sb = self._logbox.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        html = f'<span style="color:{color}">{txt}</span>'
+        for box_name in ("_logbox", "_control_logbox"):
+            box = getattr(self, box_name, None)
+            if box is None:
+                continue
+            box.append(html)
+            # 限制日志行数，防止 QTextEdit 内容过多导致 UI 卡顿
+            doc = box.document()
+            overflow = doc.blockCount() - self._LOG_MAX_BLOCKS
+            if overflow > 50:  # 攒够 50 行再批量删，减少操作频率
+                cursor = box.textCursor()
+                cursor.movePosition(cursor.MoveOperation.Start)
+                for _ in range(overflow):
+                    cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                cursor.deleteChar()  # 删掉残留空行
+            sb = box.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def _do_start(self):
         """按控制台配置启动调试引擎，并生成 DevTools 连接地址。"""
@@ -4058,15 +4186,13 @@ class App(QMainWindow):
         self._guard_label.setText("防跳转: 关闭")
         self._devtools_lbl.setText("")
         self._devtools_copy_hint.setText("")
-        # 引擎停止，清除侧栏和运行状态卡片的小程序信息
-        c = _TH[self._tn]
-        self._sb_app_name.setText("未连接")
-        self._sb_app_name.setStyleSheet(f"color: {c['text3']};")
-        self._sb_app_id.setText("")
-        self._sb_app_id.setVisible(False)
+        # 引擎停止，清除顶部目标信息和运行状态卡片的小程序信息
+        self._current_app_name = ""
+        self._current_app_id = ""
+        self._update_target_badge(False)
         self._app_lbl.setText("AppID: --")
-        self._appname_lbl.setText("")
-        self._appname_lbl.setVisible(False)
+        self._appname_lbl.setText("应用: --")
+        self._control_route_lbl.setText("当前路由: --")
         self._mcp_appid = ""
         self._mcp_route = ""
         self._update_mcp_debug_status({"frida": False, "miniapp": False, "devtools": False})
@@ -4157,17 +4283,15 @@ class App(QMainWindow):
             asyncio.run_coroutine_threadsafe(self._afetch_app_info(), self._loop)
 
     def _delayed_clear_app_info(self, gen):
-        """延迟清除侧栏信息，gen 不匹配说明已重连，跳过。"""
+        """延迟清除顶部目标信息，gen 不匹配说明已重连，跳过。"""
         if gen != self._sb_fetch_gen:
             return
-        c = _TH[self._tn]
-        self._sb_app_name.setText("未连接")
-        self._sb_app_name.setStyleSheet(f"color: {c['text3']};")
-        self._sb_app_id.setText("")
-        self._sb_app_id.setVisible(False)
+        self._current_app_name = ""
+        self._current_app_id = ""
+        self._update_target_badge(False)
         self._app_lbl.setText("AppID: --")
-        self._appname_lbl.setText("")
-        self._appname_lbl.setVisible(False)
+        self._appname_lbl.setText("应用: --")
+        self._control_route_lbl.setText("当前路由: --")
 
     def _poll_route_start(self):
         if not self._running:
@@ -4720,6 +4844,7 @@ class App(QMainWindow):
             dot.set_color(c["success"] if on else c["text4"])
             lb.setText(f"{name}: {'已连接' if on else '未连接'}")
             lb.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
+        self._update_target_badge(is_connected)
         self._update_mcp_debug_status(sts)
         # 断开时立即禁用（除了已有路由时保留导航按钮）
         if not is_connected and self._miniapp_connected:
@@ -4761,6 +4886,8 @@ class App(QMainWindow):
             aid = info.get("appid", "")
             aname = info.get("name", "")
             ent = info.get("entry", "")
+            self._current_app_name = aname
+            self._current_app_id = aid
             self._mcp_appid = aid
             self._update_mcp_debug_status()
             # 运行状态卡片 — appid
@@ -4770,27 +4897,19 @@ class App(QMainWindow):
             self._app_lbl.setText(txt)
             # 运行状态卡片 — 名称
             if aname:
-                self._appname_lbl.setText(f"当前链接小程序: {aname}")
-                self._appname_lbl.setVisible(True)
+                self._appname_lbl.setText(f"应用: {aname}")
             else:
-                self._appname_lbl.setVisible(False)
-            # 更新侧栏小程序信息卡片
-            c = _TH[self._tn]
-            if aname or aid:
-                self._sb_app_name.setText(f"名称: {aname}" if aname else "名称: --")
-                self._sb_app_name.setStyleSheet(f"color: {c['success']};")
-                self._sb_app_id.setText(f"AppID: {aid}" if aid else "AppID: --")
-                self._sb_app_id.setStyleSheet(f"color: {c['success']};")
-                self._sb_app_id.setVisible(True)
-            else:
-                self._sb_app_name.setText("未连接")
-                self._sb_app_name.setStyleSheet(f"color: {c['text3']};")
-                self._sb_app_id.setVisible(False)
+                self._appname_lbl.setText("应用: --")
+            self._update_target_badge(bool(aname or aid or self._miniapp_connected))
+            if hasattr(self, "_control_route_lbl") and ent:
+                self._control_route_lbl.setText(f"入口: /{ent}")
         elif kind == "current":
             r = item[1]
             self._mcp_route = r
             self._update_mcp_debug_status()
             self._route_lbl.setText(f"当前路由: /{r}" if r else "当前路由: --")
+            if hasattr(self, "_control_route_lbl"):
+                self._control_route_lbl.setText(f"当前路由: /{r}" if r else "当前路由: --")
             if r:
                 routes = self._flat_routes or self._all_routes
                 if r in routes:
@@ -5032,6 +5151,7 @@ if __name__ == "__main__":
             pass
 
     app = QApplication(sys.argv)
+    _install_app_font()
     app.setFont(QFont(_FN, 9))
     _ico = os.path.join(_BASE_DIR, "icon.png")
     if os.path.exists(_ico):
