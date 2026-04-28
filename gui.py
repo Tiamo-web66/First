@@ -1192,6 +1192,7 @@ class App(QMainWindow):
     # ── Hook 页面 ──
 
     def _build_hook(self):
+        """构建 Hook 脚本页面，提供脚本搜索、全局注入和即时注入操作。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 18, 24, 18)
@@ -1219,6 +1220,9 @@ class App(QMainWindow):
         c1_lay.setSpacing(8)
         hdr = QHBoxLayout()
         hdr.addWidget(_make_label("脚本列表", bold=True))
+        self._hook_search_ent = _make_entry("搜索脚本文件名...", width=220)
+        self._hook_search_ent.textChanged.connect(self._hook_refresh)
+        hdr.addWidget(self._hook_search_ent)
         hdr.addStretch()
         self._hook_count_lbl = QLabel("")
         self._hook_count_lbl.setProperty("class", "muted")
@@ -1227,6 +1231,7 @@ class App(QMainWindow):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(320)
         self._hook_inner = QWidget()
         self._hook_inner_lay = QVBoxLayout(self._hook_inner)
         self._hook_inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -1243,6 +1248,7 @@ class App(QMainWindow):
         self._page_map["hook"] = self._stack.count() - 1
 
     def _hook_refresh(self):
+        """刷新 Hook 脚本列表，并按搜索关键字过滤展示结果。"""
         while self._hook_inner_lay.count() > 1:
             item = self._hook_inner_lay.takeAt(0)
             w = item.widget()
@@ -1251,12 +1257,22 @@ class App(QMainWindow):
         self._hook_status_lbls = {}
 
         hook_dir = os.path.join(_BASE_DIR, "hook_scripts")
-        js_files = sorted(f for f in os.listdir(hook_dir) if f.endswith(".js")) if os.path.isdir(hook_dir) else []
+        all_files = sorted(f for f in os.listdir(hook_dir) if f.endswith(".js")) if os.path.isdir(hook_dir) else []
+        kw = self._hook_search_ent.text().strip().lower() if hasattr(self, "_hook_search_ent") else ""
+        js_files = [f for f in all_files if not kw or kw in f.lower()]
         if hasattr(self, "_hook_count_lbl"):
-            self._hook_count_lbl.setText(f"{len(js_files)} 个脚本")
+            count_text = f"{len(js_files)} / {len(all_files)} 个脚本" if kw else f"{len(all_files)} 个脚本"
+            self._hook_count_lbl.setText(count_text)
+
+        if not all_files:
+            lbl = QLabel("hook_scripts/ 目录下暂无 .js 文件。")
+            lbl.setProperty("class", "muted")
+            lbl.setAlignment(Qt.AlignCenter)
+            self._hook_inner_lay.insertWidget(0, lbl)
+            return
 
         if not js_files:
-            lbl = QLabel("hook_scripts/ 目录下无 .js 文件")
+            lbl = QLabel("没有匹配的 Hook 脚本。")
             lbl.setProperty("class", "muted")
             lbl.setAlignment(Qt.AlignCenter)
             self._hook_inner_lay.insertWidget(0, lbl)
@@ -3168,6 +3184,10 @@ class App(QMainWindow):
         hdr = QHBoxLayout()
         hdr.addWidget(_make_label("日志输出", bold=True))
         hdr.addStretch()
+        self._btn_copy_logs = _make_btn("复制全部", self._copy_logs)
+        hdr.addWidget(self._btn_copy_logs)
+        self._btn_export_logs = _make_btn("导出日志", self._export_logs)
+        hdr.addWidget(self._btn_export_logs)
         self._btn_clear = _make_btn("清空", self._do_clear)
         hdr.addWidget(self._btn_clear)
         lc_lay.addLayout(hdr)
@@ -4243,7 +4263,36 @@ class App(QMainWindow):
             ))
             self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
 
+    def _copy_logs(self):
+        """复制运行日志页面中的全部纯文本日志到剪贴板。"""
+        box = getattr(self, "_logbox", None)
+        text = box.toPlainText().strip() if box else ""
+        if not text:
+            self._log_add("warn", "[日志] 当前没有可复制的日志")
+            return
+        QApplication.clipboard().setText(text)
+        self._log_add("info", "[日志] 已复制全部日志")
+
+    def _export_logs(self):
+        """将运行日志页面中的全部纯文本日志导出到本地 txt 文件。"""
+        box = getattr(self, "_logbox", None)
+        text = box.toPlainText().strip() if box else ""
+        if not text:
+            self._log_add("warn", "[日志] 当前没有可导出的日志")
+            return
+        default_path = os.path.join(_BASE_DIR, "first_gui_logs.txt")
+        path, _ = QFileDialog.getSaveFileName(self, "导出日志", default_path, "Text Files (*.txt);;All Files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+            self._log_add("info", f"[日志] 已导出: {path}")
+        except Exception as e:
+            self._log_add("error", f"[日志] 导出失败: {e}")
+
     def _do_clear(self):
+        """清空控制台和运行日志页面中的日志内容。"""
         if hasattr(self, "_logbox"):
             self._logbox.clear()
         if hasattr(self, "_control_logbox"):
