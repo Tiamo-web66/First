@@ -1389,6 +1389,12 @@ class App(QMainWindow):
         self._btn_stop.setMinimumWidth(64)
         self._btn_stop.setEnabled(False)
         action_row.addWidget(self._btn_stop)
+        self._btn_control_hook = _make_btn("Hook 注入", self._open_hook_page_from_control)
+        self._btn_control_hook.setFont(QFont(_FN, 10, QFont.Bold))
+        self._btn_control_hook.setMinimumWidth(86)
+        self._btn_control_hook.setToolTip("进入 Hook 页面选择脚本并执行注入")
+        self._btn_control_hook.setVisible(False)
+        action_row.addWidget(self._btn_control_hook)
         action_row.addStretch()
         c1_lay.addLayout(action_row)
 
@@ -4076,6 +4082,25 @@ class App(QMainWindow):
             self._hdr_title.setText(f"微钩 WeHook · {title}")
         self._hl_sb()
 
+    def _open_hook_page_from_control(self):
+        """从控制台快捷进入 Hook 页面，并提示脚本准备状态。"""
+        self._show("hook")
+        hook_dir = os.path.join(_BASE_DIR, "hook_scripts")
+        has_scripts = os.path.isdir(hook_dir) and any(f.endswith(".js") for f in os.listdir(hook_dir))
+        if has_scripts:
+            self._log_add("info", "[Hook] 已打开 Hook 注入页面，可选择脚本执行注入")
+        else:
+            self._log_add("warn", "[Hook] hook_scripts/ 目录下暂无 .js 脚本")
+
+    def _update_control_hook_button(self):
+        """根据调试引擎运行状态显示或隐藏控制台 Hook 注入入口。"""
+        btn = getattr(self, "_btn_control_hook", None)
+        if not btn:
+            return
+        active = bool(self._running and self._engine and self._loop and self._loop.is_running())
+        btn.setVisible(active)
+        btn.setEnabled(active)
+
     def _header_mouse_press(self, event):
         """记录顶部栏拖拽起点，用于无边框窗口移动。"""
         if event.button() == Qt.LeftButton:
@@ -5390,6 +5415,7 @@ class App(QMainWindow):
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._btn_fetch.setEnabled(True)
+        self._update_control_hook_button()
         url = f"devtools://devtools/bundled/inspector.html?ws=127.0.0.1:{cp}"
         self._devtools_lbl.setText(url)
         self._devtools_lbl.setToolTip(url)
@@ -5413,6 +5439,7 @@ class App(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._btn_fetch.setEnabled(False)
+        self._update_control_hook_button()
         self._nav_btns(False)
         self._btn_vc_enable.setEnabled(False)
         self._btn_vc_disable.setEnabled(False)
@@ -5445,6 +5472,7 @@ class App(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._btn_fetch.setEnabled(False)
+        self._update_control_hook_button()
         self._nav_btns(False)
         self._btn_vc_enable.setEnabled(False)
         self._btn_vc_disable.setEnabled(False)
