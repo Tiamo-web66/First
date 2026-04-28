@@ -174,6 +174,9 @@ def build_qss(tn):
         border: 1px solid {c['border2']};
         border-radius: 16px;
     }}
+    QWidget#theme_switch:hover {{
+        border: 1px solid {c['accent']};
+    }}
 
     /* ── 菜单项 ── */
     QFrame.sb_item {{
@@ -248,6 +251,10 @@ def build_qss(tn):
         border-radius: 16px;
         border: 1px solid {c['border']};
     }}
+    QFrame#target_badge:hover {{
+        border: 1px solid {c['accent']};
+        background: {c['sb_hover']};
+    }}
     QLabel#target_badge_label {{
         color: {c['text3']};
         font-size: 10px;
@@ -318,6 +325,11 @@ def build_qss(tn):
     }}
     QPushButton:hover {{
         background: {c['accent2']};
+    }}
+    QPushButton:pressed {{
+        background: {c['accent2']};
+        padding-top: 6px;
+        padding-bottom: 4px;
     }}
     QPushButton:disabled {{
         background: {"#1d2536" if tn == "dark" else "#edf2f8"};
@@ -439,9 +451,12 @@ def build_qss(tn):
         margin: 0;
     }}
     QScrollBar::handle:vertical {{
-        background: {"#3a6a4a" if tn == "dark" else "#8fc4a0"};
+        background: {"#3d4a62" if tn == "dark" else "#cbd5e1"};
         border-radius: 3px;
         min-height: 20px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {c['accent']};
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0;
@@ -454,9 +469,12 @@ def build_qss(tn):
         height: 6px;
     }}
     QScrollBar::handle:horizontal {{
-        background: {"#3a6a4a" if tn == "dark" else "#8fc4a0"};
+        background: {"#3d4a62" if tn == "dark" else "#cbd5e1"};
         border-radius: 3px;
         min-width: 20px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background: {c['accent']};
     }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
         width: 0;
@@ -522,6 +540,14 @@ def build_qss(tn):
         height: 1px;
         background: {c['border']};
         margin: 4px 8px;
+    }}
+
+    QToolTip {{
+        background: {c['card']};
+        color: {c['text1']};
+        border: 1px solid {c['border2']};
+        border-radius: 6px;
+        padding: 6px 8px;
     }}
 
     /* ── QCheckBox ── */
@@ -694,16 +720,21 @@ class AnimatedStackedWidget(QStackedWidget):
 
 
 class StatusDot(QWidget):
+    """绘制小型圆点状态指示器。"""
+
     def __init__(self, parent=None):
+        """初始化固定尺寸状态点和默认未连接颜色。"""
         super().__init__(parent)
         self.setFixedSize(10, 10)
         self._color = QColor("#3c3c4c")
 
     def set_color(self, color):
+        """更新状态点颜色并触发重绘。"""
         self._color = QColor(color)
         self.update()
 
     def paintEvent(self, e):
+        """绘制圆形状态点。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
@@ -884,7 +915,7 @@ class FlowStepper(QWidget):
         ("start", "启动调试", "accent"),
         ("miniapp", "小程序连接", "success"),
         ("hook", "Hook 注入", "accent2"),
-        ("devtools", "DevTools 可用", "warning"),
+        ("devtools", "DevTools", "warning"),
     )
 
     def __init__(self, theme="dark", parent=None):
@@ -898,6 +929,12 @@ class FlowStepper(QWidget):
         """根据当前调试状态刷新流程节点颜色。"""
         self._theme = theme
         self._states.update({key: bool(states.get(key, False)) for key, _, _ in self._STEPS})
+        ready = [label for key, label, _ in self._STEPS if self._states.get(key)]
+        pending = [label for key, label, _ in self._STEPS if not self._states.get(key)]
+        if pending:
+            self.setToolTip(f"已完成: {'、'.join(ready) if ready else '无'}\n待完成: {'、'.join(pending)}")
+        else:
+            self.setToolTip("启动调试流程已完成")
         self.update()
 
     def paintEvent(self, e):
@@ -1083,7 +1120,9 @@ class App(QMainWindow):
         self._target_badge = QFrame()
         self._target_badge.setObjectName("target_badge")
         self._target_badge.setFixedHeight(32)
-        self._target_badge.setToolTip("当前 Hook 目标、小程序 AppID、CDP 端口和连接状态")
+        self._target_badge.setCursor(Qt.PointingHandCursor)
+        self._target_badge.setToolTip("当前 Hook 目标、小程序 AppID、CDP 端口和连接状态，点击复制")
+        self._target_badge.mousePressEvent = lambda e: self._copy_target_summary()
         target_lay = QHBoxLayout(self._target_badge)
         target_lay.setContentsMargins(14, 0, 10, 0)
         target_lay.setSpacing(12)
@@ -1166,6 +1205,8 @@ class App(QMainWindow):
         for pid, icon, name in _MENU:
             row = QFrame()
             row.setCursor(Qt.PointingHandCursor)
+            row.setToolTip(f"打开{name}页面")
+            row.setFixedHeight(38)
             row.setProperty("class", "sb_item")
             row_lay = QHBoxLayout(row)
             row_lay.setContentsMargins(10, 0, 8, 0)
@@ -1318,10 +1359,12 @@ class App(QMainWindow):
 
         dt_row = QHBoxLayout()
         dt_row.addWidget(QLabel("DevTools"))
-        self._devtools_lbl = QLabel("")
+        self._devtools_lbl = QLabel("未生成")
         self._devtools_lbl.setProperty("class", "accent")
         self._devtools_lbl.setFont(QFont(_FM, 8))
         self._devtools_lbl.setCursor(Qt.PointingHandCursor)
+        self._devtools_lbl.setToolTip("启动调试后生成 DevTools 调试链接")
+        self._devtools_lbl.setStyleSheet(f"color: {_TH[self._tn]['text3']};")
         self._devtools_lbl.mousePressEvent = lambda e: self._copy_devtools_url()
         dt_row.addWidget(self._devtools_lbl)
         self._devtools_copy_hint = QLabel("")
@@ -1360,8 +1403,11 @@ class App(QMainWindow):
         for key, name in [("frida", "Frida"), ("miniapp", "小程序"), ("devtools", "DevTools")]:
             dr = QHBoxLayout()
             dot = StatusDot()
+            dot.set_color(_TH[self._tn]["text4"])
+            dot.setToolTip(f"{name}: 未连接")
             dr.addWidget(dot)
             lb = QLabel(f"{name}: 未连接")
+            lb.setToolTip(f"{name}: 未连接")
             dr.addWidget(lb)
             dr.addStretch()
             c3_lay.addLayout(dr)
@@ -3982,9 +4028,13 @@ class App(QMainWindow):
     # ──────────────────────────────────
 
     def _show(self, pid):
+        """切换右侧页面，并同步侧栏高亮和顶部页面标题。"""
         self._pg = pid
         idx = self._page_map.get(pid, 0)
         self._stack.setCurrentIndexAnimated(idx)
+        title = next((name for key, _, name in _MENU if key == pid), "控制台")
+        if hasattr(self, "_hdr_title"):
+            self._hdr_title.setText(f"微钩 WeHook · {title}")
         self._hl_sb()
 
     def _header_mouse_press(self, event):
@@ -4030,6 +4080,7 @@ class App(QMainWindow):
     # ──────────────────────────────────
 
     def _toggle_theme(self):
+        """切换浅色和深色主题，并刷新所有主题敏感控件。"""
         self._tn = "light" if self._tn == "dark" else "dark"
         self.setStyleSheet(build_qss(self._tn))
         self._update_theme_label()
@@ -4046,10 +4097,20 @@ class App(QMainWindow):
         self._auto_save()
 
     def _update_theme_label(self):
+        """刷新侧栏主题切换胶囊中的文字、图标和提示。"""
         txt = "浅色模式" if self._tn == "light" else "深色模式"
         self._sb_theme.setText(txt)
+        target = "深色模式" if self._tn == "light" else "浅色模式"
+        if hasattr(self, "_theme_wrap"):
+            self._theme_wrap.setToolTip(f"当前为{txt}，点击切换到{target}")
         if hasattr(self, "_sb_theme_icon"):
             self._sb_theme_icon.set_theme(self._tn)
+        if hasattr(self, "_devtools_lbl"):
+            c = _TH[self._tn]
+            url = self._devtools_lbl.text()
+            self._devtools_lbl.setStyleSheet(
+                f"color: {c['accent'] if url.startswith('devtools://') else c['text3']};"
+            )
         self._update_window_buttons()
 
     def _update_window_buttons(self):
@@ -4099,6 +4160,26 @@ class App(QMainWindow):
             f"background: {'#183527' if self._tn == 'dark' and is_connected else '#263044' if self._tn == 'dark' else '#eaf7ef' if is_connected else '#f3f6fb'};"
             "border-radius: 10px; padding: 2px 10px; font-size: 10px; font-weight: bold;"
         )
+        self._target_badge.setToolTip(
+            f"当前目标: {app_name}\nAppID: {app_id}\nCDP 端口: {self._target_cdp_lbl.text()}\n"
+            f"状态: {'已连接' if is_connected else '未连接'}\n点击复制目标信息"
+        )
+
+    def _copy_target_summary(self):
+        """复制顶部当前 Hook 目标摘要，便于反馈调试状态。"""
+        app_name = self._current_app_name or "未连接小程序"
+        app_id = self._current_app_id or "--"
+        cdp_port = self._cp_ent.text() if hasattr(self, "_cp_ent") else "--"
+        status = self._target_status_lbl.text() if hasattr(self, "_target_status_lbl") else "未连接"
+        text = "\n".join([
+            f"软件: 微钩 WeHook",
+            f"当前目标: {app_name}",
+            f"AppID: {app_id}",
+            f"CDP 端口: {cdp_port}",
+            f"连接状态: {status}",
+        ])
+        QApplication.clipboard().setText(text)
+        self._log_add("info", "[GUI] 已复制当前 Hook 目标信息")
 
     def _update_flow_steps(self, sts=None):
         """根据调试运行状态刷新控制台流程提示中的步骤圆点。"""
@@ -5057,16 +5138,19 @@ class App(QMainWindow):
     def _copy_devtools_url(self):
         """复制当前 DevTools 调试链接到剪贴板，并短暂显示复制状态。"""
         url = self._devtools_lbl.text()
-        if url:
-            QApplication.clipboard().setText(url)
-            c = _TH[self._tn]
-            self._devtools_copy_hint.setText("已复制!")
-            self._devtools_copy_hint.setStyleSheet(f"color: {c['success']};")
-            QTimer.singleShot(1500, lambda: (
-                self._devtools_copy_hint.setText("点击复制"),
-                self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
-            ))
-            self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
+        if not url.startswith("devtools://"):
+            self._devtools_copy_hint.setText("未生成")
+            self._devtools_copy_hint.setStyleSheet(f"color: {_TH[self._tn]['text3']};")
+            return
+        QApplication.clipboard().setText(url)
+        c = _TH[self._tn]
+        self._devtools_copy_hint.setText("已复制!")
+        self._devtools_copy_hint.setStyleSheet(f"color: {c['success']};")
+        QTimer.singleShot(1500, lambda: (
+            self._devtools_copy_hint.setText("点击复制"),
+            self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
+        ))
+        self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
 
     def _copy_logs(self):
         """复制当前筛选后的运行日志纯文本到剪贴板。"""
@@ -5267,7 +5351,9 @@ class App(QMainWindow):
         self._btn_fetch.setEnabled(True)
         url = f"devtools://devtools/bundled/inspector.html?ws=127.0.0.1:{cp}"
         self._devtools_lbl.setText(url)
+        self._devtools_lbl.setToolTip(url)
         c = _TH[self._tn]
+        self._devtools_lbl.setStyleSheet(f"color: {c['accent']};")
         self._devtools_copy_hint.setText("点击复制")
         self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
         self._log_add("info", f"[gui] 浏览器访问: {url}")
@@ -5290,6 +5376,11 @@ class App(QMainWindow):
         self._btn_vc_enable.setEnabled(False)
         self._btn_vc_disable.setEnabled(False)
         self._btn_vc_detect.setEnabled(False)
+        c = _TH[self._tn]
+        self._devtools_lbl.setText("未生成")
+        self._devtools_lbl.setToolTip("启动调试后生成 DevTools 调试链接")
+        self._devtools_lbl.setStyleSheet(f"color: {c['text3']};")
+        self._devtools_copy_hint.setText("")
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         self._update_flow_steps()
@@ -5322,7 +5413,10 @@ class App(QMainWindow):
         self._redirect_guard_on = False
         self._guard_switch.setChecked(False)
         self._guard_label.setText("防跳转: 关闭")
-        self._devtools_lbl.setText("")
+        c = _TH[self._tn]
+        self._devtools_lbl.setText("未生成")
+        self._devtools_lbl.setToolTip("启动调试后生成 DevTools 调试链接")
+        self._devtools_lbl.setStyleSheet(f"color: {c['text3']};")
         self._devtools_copy_hint.setText("")
         # 引擎停止，清除顶部目标信息和运行状态卡片的小程序信息
         self._current_app_name = ""
@@ -6123,7 +6217,10 @@ class App(QMainWindow):
         for key, (dot, lb, name) in self._dots.items():
             on = sts.get(key, False)
             dot.set_color(c["success"] if on else c["text4"])
-            lb.setText(f"{name}: {'已连接' if on else '未连接'}")
+            state_text = "已连接" if on else "未连接"
+            lb.setText(f"{name}: {state_text}")
+            dot.setToolTip(f"{name}: {state_text}")
+            lb.setToolTip(f"{name}: {state_text}")
             lb.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
         self._update_target_badge(is_connected)
         self._update_mcp_debug_status(sts)
