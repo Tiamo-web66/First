@@ -6,30 +6,29 @@
 
 ## 截图预览
 
-### 主界面
+### 控制台
 
-![主界面](https://s1.galgame.fun/imgb/u0/20260408_69d655f49ca7e.png)
+![控制台](docs/screenshots/control.png)
 
 ### 路由导航
 
-![路由导航](https://s1.galgame.fun/imgb/u0/20260408_69d6560ca1a39.png)
+![路由导航](docs/screenshots/navigator.png)
 
-### 云函数分析
+### 云扫描
 
-![云函数分析](https://s1.galgame.fun/imgb/u0/20260402_69ce527ca5480.png)
+![云扫描](docs/screenshots/cloud.png)
 
 ### 调试开关（JSRPC / wx.cloud 调用）
 
-![调试开关](https://s1.galgame.fun/imgb/u0/20260408_69d6564195009.png)
+![调试开关](docs/screenshots/debug-switches.png)
 
 ### 敏感信息提取
 
-![敏感信息提取-1](https://s1.galgame.fun/imgb/u55/20260416_69e0be0e1c1d7.png)
+![敏感信息提取](docs/screenshots/extract.png)
 
-<img src="https://s1.galgame.fun/imgb/u55/20260416_69e0be0c38e39.png" alt="敏感信息提取-2" />
+### 常见问题
 
-![敏感信息提取-3](https://s1.galgame.fun/imgb/u55/20260416_69e0be0c70d46.png)
-
+![常见问题](docs/screenshots/faq.png)
 ---
 
 ## 功能特性
