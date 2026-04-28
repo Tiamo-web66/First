@@ -1115,6 +1115,9 @@ class App(QMainWindow):
         self._route_count_lbl.setProperty("class", "muted")
         tree_hdr.addWidget(self._route_count_lbl)
         tree_hdr.addStretch()
+        self._btn_copy_route_list = _make_btn("复制列表", self._do_copy_route_list)
+        self._btn_copy_route_list.setEnabled(False)
+        tree_hdr.addWidget(self._btn_copy_route_list)
         self._route_lbl = QLabel("当前路由: --")
         self._route_lbl.setProperty("class", "muted")
         tree_hdr.addWidget(self._route_lbl)
@@ -1509,7 +1512,12 @@ class App(QMainWindow):
         call_lay = QVBoxLayout(call_card)
         call_lay.setContentsMargins(16, 12, 16, 12)
         call_lay.setSpacing(8)
-        call_lay.addWidget(_make_label("手动调用", bold=True))
+        call_hdr = QHBoxLayout()
+        call_hdr.addWidget(_make_label("手动调用", bold=True))
+        call_hdr.addStretch()
+        self._btn_cloud_copy_result = _make_btn("复制结果", self._cloud_copy_result)
+        call_hdr.addWidget(self._btn_cloud_copy_result)
+        call_lay.addLayout(call_hdr)
 
         call_row = QHBoxLayout()
         call_row.setSpacing(10)
@@ -2195,6 +2203,11 @@ class App(QMainWindow):
             btn_view.clicked.connect(lambda _, a=appid: self._ext_view_results(a))
             row_lay.addWidget(btn_view)
 
+            btn_more = QPushButton("更多")
+            btn_more.setFixedWidth(50)
+            btn_more.clicked.connect(lambda _, a=appid, b=btn_more: self._ext_show_app_menu(a, b))
+            row_lay.addWidget(btn_more)
+
             btn_del = QPushButton("删除")
             btn_del.setFixedWidth(50)
             btn_del.clicked.connect(lambda _, a=appid: self._ext_delete_app(a))
@@ -2205,7 +2218,8 @@ class App(QMainWindow):
 
             self._ext_app_widgets[appid] = {
                 "row": row, "btn_dec": btn_dec, "btn_scan": btn_scan,
-                "btn_view": btn_view, "btn_del": btn_del, "lbl_name": lbl_name,
+                "btn_view": btn_view, "btn_more": btn_more, "btn_del": btn_del,
+                "lbl_name": lbl_name,
             }
 
             # 插入在最前面（最新的在上面）
@@ -2234,6 +2248,33 @@ class App(QMainWindow):
 
         widgets["btn_scan"].setEnabled(is_dec)
         widgets["btn_view"].setEnabled(is_scanned)
+
+    def _ext_copy_appid(self, appid):
+        """复制小程序 AppID 到剪贴板，并写入处理日志。"""
+        QApplication.clipboard().setText(appid)
+        self._ext_log(f"已复制 AppID: {appid}")
+
+    def _ext_show_app_menu(self, appid, button):
+        """显示单个小程序的更多操作菜单。"""
+        menu = QMenu(self)
+        menu.addAction("复制 AppID", lambda: self._ext_copy_appid(appid))
+        menu.addAction("打开输出目录", lambda: self._ext_open_output_dir(appid))
+        state = self._ext_app_states.get(appid, {})
+        result_dir = state.get("result_dir", "")
+        html_path = os.path.join(result_dir, "report.html")
+        if os.path.isfile(html_path):
+            menu.addAction("打开 HTML 报告", lambda p=html_path: QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
+        menu.exec(button.mapToGlobal(QPoint(0, button.height())))
+
+    def _ext_open_output_dir(self, appid):
+        """打开指定小程序的输出目录，不存在时创建目录。"""
+        path = os.path.join(_BASE_DIR, "output", appid)
+        try:
+            os.makedirs(path, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            self._ext_log(f"已打开输出目录: {path}")
+        except Exception as e:
+            self._ext_log(f"打开输出目录失败: {e}")
 
     # ============================================
     # 提取页 - 反编译
@@ -4423,7 +4464,7 @@ class App(QMainWindow):
     def _nav_btns(self, on):
         for b in (self._btn_go, self._btn_relaunch,
                   self._btn_back, self._btn_refresh, self._btn_auto, self._btn_prev,
-                  self._btn_next, self._btn_copy_route):
+                  self._btn_next, self._btn_copy_route, self._btn_copy_route_list):
             b.setEnabled(on)
         self._guard_switch.setEnabled(on)
 
@@ -4678,6 +4719,29 @@ class App(QMainWindow):
             QApplication.clipboard().setText(route)
             self._log_add("info", f"[导航] 已复制路由: {route}")
 
+    def _visible_tree_routes(self):
+        """收集当前路由树中可见的路由路径，包含筛选后的展示结果。"""
+        routes = []
+        for i in range(self._tree.topLevelItemCount()):
+            top = self._tree.topLevelItem(i)
+            route = top.data(0, Qt.UserRole)
+            if route:
+                routes.append(route)
+            for j in range(top.childCount()):
+                child_route = top.child(j).data(0, Qt.UserRole)
+                if child_route:
+                    routes.append(child_route)
+        return routes
+
+    def _do_copy_route_list(self):
+        """复制当前路由树中正在展示的路由列表。"""
+        routes = self._visible_tree_routes()
+        if not routes:
+            self._log_add("error", "[导航] 当前没有可复制的路由")
+            return
+        QApplication.clipboard().setText("\n".join(routes))
+        self._log_add("info", f"[导航] 已复制 {len(routes)} 条路由")
+
     def _nav_context_menu(self, pos):
         item = self._tree.itemAt(pos)
         if not item:
@@ -4840,10 +4904,17 @@ class App(QMainWindow):
         menu = QMenu(self)
         full_text = "  |  ".join(vals)
         menu.addAction("复制整行", lambda: QApplication.clipboard().setText(full_text))
+        if vals[0]:
+            menu.addAction(f"复制 AppID: {vals[0][:30]}",
+                           lambda v=vals[0]: QApplication.clipboard().setText(v))
         name_str = vals[2] if len(vals) > 2 else ""
         if name_str:
             menu.addAction(f"复制名称: {name_str[:30]}",
                            lambda: QApplication.clipboard().setText(name_str))
+        if len(vals) > 3 and vals[3]:
+            menu.addAction("复制参数", lambda v=vals[3]: QApplication.clipboard().setText(v))
+        if len(vals) > 4 and vals[4]:
+            menu.addAction("复制状态", lambda v=vals[4]: QApplication.clipboard().setText(v))
         menu.addSeparator()
         row_id = id(item)
         if row_id in self._cloud_row_results:
@@ -4867,6 +4938,15 @@ class App(QMainWindow):
         detail = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         c = _TH[self._tn]
         self._cloud_result.setHtml(f'<span style="color:{c["text1"]}">「{name}」返回结果:\n{detail}</span>')
+
+    def _cloud_copy_result(self):
+        """复制云函数手动调用或右键查看区域中的结果文本。"""
+        text = self._cloud_result.toPlainText().strip()
+        if not text:
+            self._log_add("warn", "[云扫描] 当前没有可复制的结果")
+            return
+        QApplication.clipboard().setText(text)
+        self._log_add("info", "[云扫描] 已复制结果")
 
     def _cloud_update_status(self):
         """刷新云扫描记录计数和空状态提示。"""
