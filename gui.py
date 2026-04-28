@@ -165,11 +165,14 @@ def build_qss(tn):
     QLabel#sb_theme {{
         color: {c['text2']};
         background: transparent;
-        padding: 8px 12px;
-        border-radius: 14px;
     }}
     QLabel#sb_theme:hover {{
         color: {c['text1']};
+    }}
+    QWidget#theme_switch {{
+        background: {c['input']};
+        border: 1px solid {c['border2']};
+        border-radius: 16px;
     }}
 
     /* ── 菜单项 ── */
@@ -874,6 +877,63 @@ class WindowButton(QWidget):
             p.drawLine(12, 6, 6, 12)
 
 
+class FlowStepper(QWidget):
+    """绘制控制台启动调试流程节点，统一展示连接和注入状态。"""
+
+    _STEPS = (
+        ("start", "启动调试", "accent"),
+        ("miniapp", "小程序连接", "success"),
+        ("hook", "Hook 注入", "accent2"),
+        ("devtools", "DevTools 可用", "warning"),
+    )
+
+    def __init__(self, theme="dark", parent=None):
+        """初始化流程节点控件，并设置默认状态。"""
+        super().__init__(parent)
+        self._theme = theme
+        self._states = {key: False for key, _, _ in self._STEPS}
+        self.setMinimumHeight(54)
+
+    def set_states(self, states, theme):
+        """根据当前调试状态刷新流程节点颜色。"""
+        self._theme = theme
+        self._states.update({key: bool(states.get(key, False)) for key, _, _ in self._STEPS})
+        self.update()
+
+    def paintEvent(self, e):
+        """绘制平滑流程线、节点圆点和节点标签。"""
+        c = _TH.get(self._theme, _D)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        width = max(1, self.width())
+        left, right = 24, 24
+        y = 18
+        label_y = 36
+        step_count = len(self._STEPS)
+        gap = (width - left - right) / max(1, step_count - 1)
+        xs = [int(left + i * gap) for i in range(step_count)]
+
+        for idx in range(step_count - 1):
+            a, b = xs[idx], xs[idx + 1]
+            active = self._states.get(self._STEPS[idx][0], False) and self._states.get(self._STEPS[idx + 1][0], False)
+            p.setPen(QPen(QColor(c["accent"] if active else c["border"]), 2))
+            p.drawLine(a + 8, y, b - 8, y)
+
+        for idx, (key, label, color_key) in enumerate(self._STEPS):
+            x = xs[idx]
+            active = self._states.get(key, False)
+            fill = QColor(c[color_key] if active else c["input"])
+            border = QColor(c[color_key] if active else c["border2"])
+            text = QColor(c["text1"] if active else c["text3"])
+            p.setPen(QPen(border, 2))
+            p.setBrush(fill)
+            p.drawEllipse(x - 7, y - 7, 14, 14)
+            p.setPen(text)
+            p.setFont(QFont(_FN, 8))
+            rect_w = 96
+            p.drawText(x - rect_w // 2, label_y, rect_w, 16, Qt.AlignCenter, label)
+
+
 # ══════════════════════════════════════════
 #  辅助函数
 # ══════════════════════════════════════════
@@ -920,7 +980,7 @@ class App(QMainWindow):
         super().__init__()
         _install_app_font()
         self._os_tag = "macOS" if sys.platform == "darwin" else "Windows"
-        self.setWindowTitle(f"First-{self._os_tag}")
+        self.setWindowTitle(f"微钩-WeHook-{self._os_tag}")
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         _ico = os.path.join(_BASE_DIR, "icon.png")
         if os.path.exists(_ico):
@@ -1016,7 +1076,7 @@ class App(QMainWindow):
         hdr_lay = QHBoxLayout(self._hdr_frame)
         hdr_lay.setContentsMargins(14, 0, 10, 0)
         hdr_lay.setSpacing(10)
-        self._hdr_title = QLabel("First 小程序安全调试台")
+        self._hdr_title = QLabel("微钩 WeHook 小程序安全调试台")
         self._hdr_title.setObjectName("page_title")
         hdr_lay.addWidget(self._hdr_title)
         hdr_lay.addStretch()
@@ -1085,10 +1145,10 @@ class App(QMainWindow):
         sb_head_lay.setContentsMargins(26, 22, 20, 14)
         sb_head_lay.setSpacing(4)
 
-        self._sb_logo = QLabel("First")
+        self._sb_logo = QLabel("微钩")
         self._sb_logo.setObjectName("sb_logo")
         sb_head_lay.addWidget(self._sb_logo)
-        sb_desc = QLabel("小程序安全调试工具")
+        sb_desc = QLabel("WeHook 小程序调试工具")
         sb_desc.setProperty("class", "muted")
         sb_desc.setFont(QFont(_FN, 9))
         sb_head_lay.addWidget(sb_desc)
@@ -1132,17 +1192,31 @@ class App(QMainWindow):
         self._sb_theme_icon = ThemeIcon(self._tn)
         self._sb_theme_icon.setCursor(Qt.PointingHandCursor)
         self._sb_theme_icon.mousePressEvent = lambda e: self._toggle_theme()
+        self._sb_theme_action = QLabel("切换")
+        self._sb_theme_action.setObjectName("sb_theme")
+        self._sb_theme_action.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._sb_theme_action.setCursor(Qt.PointingHandCursor)
+        self._sb_theme_action.setFont(QFont(_FN, 8))
+        self._sb_theme_action.mousePressEvent = lambda e: self._toggle_theme()
         self._theme_wrap = QWidget()
+        self._theme_wrap.setObjectName("theme_switch")
+        self._theme_wrap.setFixedHeight(34)
         self._theme_wrap.setCursor(Qt.PointingHandCursor)
         self._theme_wrap.setToolTip("切换浅色 / 深色主题")
         self._theme_wrap.mousePressEvent = lambda e: self._toggle_theme()
         theme_lay = QHBoxLayout(self._theme_wrap)
-        theme_lay.setContentsMargins(26, 0, 16, 0)
+        theme_lay.setContentsMargins(12, 0, 12, 0)
         theme_lay.setSpacing(8)
         theme_lay.addWidget(self._sb_theme_icon)
         theme_lay.addWidget(self._sb_theme)
         theme_lay.addStretch()
-        sb_lay.addWidget(self._theme_wrap)
+        theme_lay.addWidget(self._sb_theme_action)
+        theme_outer = QWidget()
+        theme_outer_lay = QHBoxLayout(theme_outer)
+        theme_outer_lay.setContentsMargins(26, 0, 26, 0)
+        theme_outer_lay.addWidget(self._theme_wrap)
+        sb_lay.addWidget(theme_outer)
+        sb_lay.addSpacing(10)
 
         self._sb_author = QLabel("作者: TiAmo")
         self._sb_author.setObjectName("sb_theme")
@@ -1206,35 +1280,8 @@ class App(QMainWindow):
         flow_tip.setWordWrap(True)
         c1_lay.addWidget(flow_tip)
 
-        flow_row = QHBoxLayout()
-        flow_row.setSpacing(8)
-        self._flow_steps = {}
-        self._flow_lines = []
-        for idx, (key, label) in enumerate((
-            ("start", "启动"),
-            ("miniapp", "连接"),
-            ("hook", "Hook"),
-            ("devtools", "DevTools"),
-        )):
-            if idx:
-                line = QFrame()
-                line.setFixedHeight(1)
-                line.setStyleSheet(f"background: {_TH[self._tn]['border']};")
-                flow_row.addWidget(line, 1)
-                self._flow_lines.append(line)
-            step = QHBoxLayout()
-            step.setSpacing(5)
-            dot = StatusDot()
-            txt = QLabel(label)
-            txt.setProperty("class", "muted")
-            txt.setFont(QFont(_FN, 8))
-            step.addWidget(dot)
-            step.addWidget(txt)
-            flow_row.addLayout(step)
-            self._flow_steps[key] = (dot, txt)
-        c1_lay.addLayout(flow_row)
-
         row1 = QHBoxLayout()
+        row1.setSpacing(10)
         row1.addWidget(QLabel("CDP 端口"))
         self._cp_ent = _make_entry(width=100)
         self._cp_ent.setText(str(self._cfg.get("cdp_port", CDP_PORT)))
@@ -1249,20 +1296,25 @@ class App(QMainWindow):
         self._devtools_bp_status_lbl = QLabel("")
         self._devtools_bp_status_lbl.setProperty("class", "muted")
         row1.addWidget(self._devtools_bp_status_lbl)
-        row1.addStretch()
         c1_lay.addLayout(row1)
         self._refresh_devtools_breakpoint_status()
 
-        ar = QHBoxLayout()
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self._btn_start = _make_btn("启动调试", self._do_start)
         self._btn_start.setFont(QFont(_FN, 10, QFont.Bold))
-        ar.addWidget(self._btn_start)
+        self._btn_start.setMinimumWidth(84)
+        action_row.addWidget(self._btn_start)
         self._btn_stop = _make_btn("停止", self._do_stop)
         self._btn_stop.setFont(QFont(_FN, 10, QFont.Bold))
+        self._btn_stop.setMinimumWidth(64)
         self._btn_stop.setEnabled(False)
-        ar.addWidget(self._btn_stop)
-        ar.addStretch()
-        c1_lay.addLayout(ar)
+        action_row.addWidget(self._btn_stop)
+        action_row.addStretch()
+        c1_lay.addLayout(action_row)
+
+        self._flow_stepper = FlowStepper(self._tn)
+        c1_lay.addWidget(self._flow_stepper)
 
         dt_row = QHBoxLayout()
         dt_row.addWidget(QLabel("DevTools"))
@@ -1278,10 +1330,10 @@ class App(QMainWindow):
         dt_row.addWidget(self._devtools_copy_hint)
         dt_row.addStretch()
         c1_lay.addLayout(dt_row)
-        top_row.addWidget(c1, 3)
+        top_row.addWidget(c1, 5)
 
         ctx_card = _make_card()
-        ctx_card.setMinimumWidth(210)
+        ctx_card.setMinimumWidth(190)
         ctx_lay = QVBoxLayout(ctx_card)
         ctx_lay.setContentsMargins(18, 14, 18, 14)
         ctx_lay.setSpacing(8)
@@ -1360,6 +1412,9 @@ class App(QMainWindow):
         self._srch_ent = _make_entry("输入路由关键字搜索...")
         self._srch_ent.textChanged.connect(self._do_filter)
         sf.addWidget(self._srch_ent, 1)
+        self._btn_clear_route_search = _make_btn("清除搜索", self._clear_route_search)
+        self._btn_clear_route_search.setEnabled(False)
+        sf.addWidget(self._btn_clear_route_search)
         self._btn_fetch = _make_btn("获取路由", self._do_fetch)
         self._btn_fetch.setEnabled(False)
         sf.addWidget(self._btn_fetch)
@@ -1453,6 +1508,10 @@ class App(QMainWindow):
         b2.addWidget(self._guard_label)
         b2.addStretch()
         op_lay.addLayout(b2)
+        self._nav_hint_lbl = QLabel("连接小程序并获取路由后，可选择路由执行跳转、重启、遍历和防跳转。")
+        self._nav_hint_lbl.setProperty("class", "muted")
+        self._nav_hint_lbl.setWordWrap(True)
+        op_lay.addWidget(self._nav_hint_lbl)
 
         self._prog = QProgressBar()
         self._prog.setMaximum(100)
@@ -1487,6 +1546,8 @@ class App(QMainWindow):
         tip_row.addStretch()
         self._btn_hook_refresh = _make_btn("刷新列表", self._hook_refresh)
         tip_row.addWidget(self._btn_hook_refresh)
+        self._btn_hook_copy_dir = _make_btn("复制目录", self._copy_hook_dir)
+        tip_row.addWidget(self._btn_hook_copy_dir)
         top_lay.addLayout(tip_row)
         lay.addWidget(top_card)
 
@@ -1499,6 +1560,9 @@ class App(QMainWindow):
         self._hook_search_ent = _make_entry("搜索脚本文件名...", width=220)
         self._hook_search_ent.textChanged.connect(self._hook_refresh)
         hdr.addWidget(self._hook_search_ent)
+        self._btn_hook_clear_search = _make_btn("清除搜索", self._clear_hook_search)
+        self._btn_hook_clear_search.setEnabled(False)
+        hdr.addWidget(self._btn_hook_clear_search)
         hdr.addStretch()
         self._hook_count_lbl = QLabel("")
         self._hook_count_lbl.setProperty("class", "muted")
@@ -1537,8 +1601,15 @@ class App(QMainWindow):
         kw = self._hook_search_ent.text().strip().lower() if hasattr(self, "_hook_search_ent") else ""
         js_files = [f for f in all_files if not kw or kw in f.lower()]
         if hasattr(self, "_hook_count_lbl"):
-            count_text = f"{len(js_files)} / {len(all_files)} 个脚本" if kw else f"{len(all_files)} 个脚本"
+            global_count = len([f for f in all_files if f in self._global_hook_scripts])
+            injected_count = len([f for f in all_files if f in self._hook_injected])
+            count_text = (
+                f"{len(js_files)} / {len(all_files)} 个脚本"
+                if kw else f"{len(all_files)} 个脚本 · 全局 {global_count} · 已注入 {injected_count}"
+            )
             self._hook_count_lbl.setText(count_text)
+        if hasattr(self, "_btn_hook_clear_search"):
+            self._btn_hook_clear_search.setEnabled(bool(kw))
 
         if not all_files:
             lbl = QLabel("hook_scripts/ 目录下暂无 .js 文件。")
@@ -1603,11 +1674,25 @@ class App(QMainWindow):
             row_lay.addWidget(global_cb)
 
             inject_btn = _make_btn("注入", lambda checked=False, f=fn: self._hook_inject(f))
+            inject_btn.setEnabled(bool(self._engine and self._loop and self._loop.is_running()))
+            inject_btn.setToolTip("需要先启动调试并连接小程序")
             row_lay.addWidget(inject_btn)
             clear_btn = _make_btn("清除", lambda checked=False, f=fn: self._hook_clear(f))
             row_lay.addWidget(clear_btn)
 
             self._hook_inner_lay.insertWidget(self._hook_inner_lay.count() - 1, row)
+
+    def _clear_hook_search(self):
+        """清空 Hook 脚本搜索关键字并恢复完整列表。"""
+        if hasattr(self, "_hook_search_ent"):
+            self._hook_search_ent.clear()
+        self._hook_refresh()
+
+    def _copy_hook_dir(self):
+        """复制 Hook 脚本目录路径，便于用户定位脚本存放位置。"""
+        path = os.path.join(_BASE_DIR, "hook_scripts")
+        QApplication.clipboard().setText(path)
+        self._log_add("info", f"[Hook] 已复制脚本目录: {path}")
 
     def _hook_inject(self, filename):
         if not self._engine or not self._loop or not self._loop.is_running():
@@ -1833,8 +1918,15 @@ class App(QMainWindow):
     def _build_mcp(self):
         """构建 MCP 控制台页面，展示服务状态、连接信息、权限和日志。"""
         page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 12, 24, 16)
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(24, 12, 24, 16)
+        page_lay.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        content = QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
         lay.setAlignment(Qt.AlignTop)
 
@@ -1925,11 +2017,8 @@ class App(QMainWindow):
         self._mcp_config_box.setPlainText(self._mcp_client_config())
         conn_lay.addWidget(self._mcp_config_box)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
-        top_row.addWidget(status_card, 1)
-        top_row.addWidget(conn_card, 2)
-        lay.addLayout(top_row)
+        lay.addWidget(status_card)
+        lay.addWidget(conn_card)
 
         perm_card = _make_card()
         perm_lay = QVBoxLayout(perm_card)
@@ -1993,6 +2082,8 @@ class App(QMainWindow):
         self._set_mcp_status("未启动", False)
         self._mcp_add_log("MCP 页面已就绪，等待外部客户端连接。")
 
+        scroll.setWidget(content)
+        page_lay.addWidget(scroll)
         self._stack.addWidget(page)
         self._page_map["mcp"] = self._stack.count() - 1
 
@@ -3738,7 +3829,14 @@ class App(QMainWindow):
         self._log_level_combo.currentIndexChanged.connect(self._render_logbox)
         filter_row.addWidget(self._log_level_combo)
         self._btn_clear_log_filter = _make_btn("清除筛选", self._clear_log_filter)
+        self._btn_clear_log_filter.setEnabled(False)
         filter_row.addWidget(self._btn_clear_log_filter)
+        self._log_autoscroll_cb = QCheckBox("自动滚动")
+        self._log_autoscroll_cb.setChecked(True)
+        filter_row.addWidget(self._log_autoscroll_cb)
+        self._log_count_lbl = QLabel("0 条")
+        self._log_count_lbl.setProperty("class", "muted")
+        filter_row.addWidget(self._log_count_lbl)
         lc_lay.addLayout(filter_row)
 
         self._logbox = QTextEdit()
@@ -3938,8 +4036,7 @@ class App(QMainWindow):
         self._update_toggle_colors()
         self._refresh_devtools_breakpoint_status()
         self._refresh_sb_app_card()
-        self._set_mcp_status("界面占位（服务待接入）" if self._mcp_running else "未启动",
-                             self._mcp_running)
+        self._set_mcp_status("运行中" if self._mcp_running else "未启动", self._mcp_running)
         self._update_mcp_debug_status()
         self._ext_refresh_custom_patterns()
         self._render_control_logbox()
@@ -4005,9 +4102,8 @@ class App(QMainWindow):
 
     def _update_flow_steps(self, sts=None):
         """根据调试运行状态刷新控制台流程提示中的步骤圆点。"""
-        if not hasattr(self, "_flow_steps"):
+        if not hasattr(self, "_flow_stepper"):
             return
-        c = _TH[self._tn]
         current = sts or self._last_sts or {}
         states = {
             "start": bool(self._running),
@@ -4015,14 +4111,7 @@ class App(QMainWindow):
             "hook": bool(self._hook_injected),
             "devtools": bool(current.get("devtools")),
         }
-        passed = False
-        for key, (dot, label) in self._flow_steps.items():
-            on = states.get(key, False)
-            passed = passed or on
-            dot.set_color(c["success"] if on else c["text4"])
-            label.setStyleSheet(f"color: {c['text1'] if on else c['text3']};")
-        for line in getattr(self, "_flow_lines", []):
-            line.setStyleSheet(f"background: {c['accent'] if passed else c['border']};")
+        self._flow_stepper.set_states(states, self._tn)
 
     def _auto_save(self):
         """保存 GUI 的主题、调试开关、提取配置和 MCP 权限配置。"""
@@ -5012,6 +5101,8 @@ class App(QMainWindow):
             self._logbox.clear()
         if hasattr(self, "_control_logbox"):
             self._control_logbox.clear()
+        if hasattr(self, "_log_count_lbl"):
+            self._log_count_lbl.setText("0 条")
 
     _LOG_MAX_BLOCKS = 500  # 最多保留的日志行数
 
@@ -5050,13 +5141,25 @@ class App(QMainWindow):
         box = getattr(self, "_logbox", None)
         if box is None:
             return
+        entries = self._filtered_log_entries()
         box.setUpdatesEnabled(False)
         box.clear()
-        for lv, txt in self._filtered_log_entries():
+        for lv, txt in entries:
             box.append(self._log_html(lv, txt))
         box.setUpdatesEnabled(True)
-        sb = box.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        if hasattr(self, "_log_count_lbl"):
+            total = len(self._log_entries)
+            shown = len(entries)
+            self._log_count_lbl.setText(f"{shown} / {total} 条" if shown != total else f"{total} 条")
+        active_filter = bool(
+            (self._log_filter_ent.text().strip() if hasattr(self, "_log_filter_ent") else "")
+            or (self._log_level_combo.currentData() if hasattr(self, "_log_level_combo") else "")
+        )
+        if hasattr(self, "_btn_clear_log_filter"):
+            self._btn_clear_log_filter.setEnabled(active_filter)
+        if self._log_autoscroll_enabled():
+            sb = box.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def _render_control_logbox(self):
         """按当前主题重绘控制台日志，保持控制台日志始终显示全量记录。"""
@@ -5079,6 +5182,11 @@ class App(QMainWindow):
             self._log_level_combo.setCurrentIndex(0)
         self._render_logbox()
 
+    def _log_autoscroll_enabled(self):
+        """返回运行日志页面是否允许自动滚动到底部。"""
+        cb = getattr(self, "_log_autoscroll_cb", None)
+        return True if cb is None else cb.isChecked()
+
     def _log_add(self, lv, txt):
         """记录一条日志，并同步更新控制台日志与运行日志页面。"""
         self._log_entries.append((lv, txt))
@@ -5093,6 +5201,10 @@ class App(QMainWindow):
             log_box = getattr(self, "_logbox", None)
             if log_box is not None:
                 self._append_log_html(log_box, self._log_html(lv, txt))
+        if hasattr(self, "_log_count_lbl"):
+            shown = len(self._filtered_log_entries())
+            total = len(self._log_entries)
+            self._log_count_lbl.setText(f"{shown} / {total} 条" if shown != total else f"{total} 条")
 
     def _log_matches_filter(self, lv, txt):
         """判断单条日志是否符合运行日志页的当前筛选条件。"""
@@ -5116,6 +5228,8 @@ class App(QMainWindow):
                 cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
             cursor.deleteChar()
+        if box is getattr(self, "_logbox", None) and not self._log_autoscroll_enabled():
+            return
         sb = box.verticalScrollBar()
         sb.setValue(sb.maximum())
 
@@ -5158,6 +5272,7 @@ class App(QMainWindow):
         self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
         self._log_add("info", f"[gui] 浏览器访问: {url}")
         self._update_flow_steps()
+        self._hook_refresh()
 
     async def _astart(self):
         try:
@@ -5178,6 +5293,7 @@ class App(QMainWindow):
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         self._update_flow_steps()
+        self._hook_refresh()
 
     def _do_stop(self):
         if not self._running:
@@ -5220,6 +5336,7 @@ class App(QMainWindow):
         self._update_mcp_debug_status({"frida": False, "miniapp": False, "devtools": False})
         self._last_sts = {}
         self._update_flow_steps()
+        self._hook_refresh()
 
     def _nav_btns(self, on):
         for b in (self._btn_go, self._btn_relaunch,
@@ -5564,8 +5681,18 @@ class App(QMainWindow):
             return
         count = self._tree.topLevelItemCount()
         total = len(self._flat_routes or self._all_routes)
+        kw = self._srch_ent.text().strip() if hasattr(self, "_srch_ent") else ""
         if hasattr(self, "_route_count_lbl"):
             self._route_count_lbl.setText(count_text or (f"{total} 条" if total else "0 条"))
+        if hasattr(self, "_btn_clear_route_search"):
+            self._btn_clear_route_search.setEnabled(bool(kw))
+        if hasattr(self, "_nav_hint_lbl"):
+            if kw:
+                self._nav_hint_lbl.setText(f"正在按「{kw}」筛选路由，清除搜索后可恢复完整路由树。")
+            elif total:
+                self._nav_hint_lbl.setText(f"已载入 {total} 条路由，可选择路由执行页面操作或自动遍历。")
+            else:
+                self._nav_hint_lbl.setText("连接小程序并获取路由后，可选择路由执行跳转、重启、遍历和防跳转。")
         if not hasattr(self, "_route_empty_hint"):
             return
         if count:
@@ -5592,6 +5719,12 @@ class App(QMainWindow):
             self._tree.addTopLevelItem(item)
         self._tree.setUpdatesEnabled(True)
         self._update_route_empty_state("没有匹配的路由。", f"{len(flt)} / {len(self._all_routes)} 条")
+
+    def _clear_route_search(self):
+        """清空路由搜索关键字并恢复完整路由树。"""
+        if hasattr(self, "_srch_ent"):
+            self._srch_ent.clear()
+        self._do_filter()
 
     def _fill_tree(self, pages, tab_bar):
         self._tree.setUpdatesEnabled(False)
