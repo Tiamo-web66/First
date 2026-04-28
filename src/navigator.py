@@ -17,11 +17,54 @@ class MiniProgramNavigator:
         self.tab_bar_pages = []
         self.app_info = {}
         self._injected = False
+        self._capture_requested = False
 
     async def _ensure(self, force=False):
-        if force or not self._injected:
+        """Ensure window.nav exists in the current runtime and restore capture if needed."""
+        should_inject = force or not self._injected
+        if not should_inject:
+            should_inject = not await self._nav_ready()
+        if should_inject:
             await self.engine.evaluate_js(_NAV_JS, timeout=10.0)
             self._injected = True
+            await self._restore_capture_state()
+
+    async def _nav_ready(self):
+        """Check whether the current miniapp runtime still has a usable window.nav bridge."""
+        result = await self.engine.evaluate_js(
+            "JSON.stringify({hasNav:!!window.nav,hasWxFrame:!!(window.nav&&window.nav.wxFrame)})",
+            timeout=3.0,
+        )
+        value = self._extract_value(result)
+        if not value:
+            return False
+        try:
+            state = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return bool(state.get("hasNav") and state.get("hasWxFrame"))
+
+    async def _restore_capture_state(self):
+        """Re-enable request capture after navigator reinjection when it was enabled before."""
+        if not self._capture_requested:
+            return
+        result = await self._call_nav_json(
+            "JSON.stringify(window.nav.startCapture())",
+            timeout=5.0,
+        )
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError("failed to restore request capture state")
+
+    async def _call_nav_json(self, expression, timeout=5.0):
+        """Evaluate a window.nav expression that returns JSON text and decode the payload."""
+        result = await self.engine.evaluate_js(expression, timeout=timeout)
+        value = self._extract_value(result)
+        if value is None:
+            raise RuntimeError("miniapp runtime returned no value")
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"miniapp runtime returned invalid JSON: {exc}") from exc
 
     async def fetch_config(self):
         """Inject navigator and read pages/tabBar/appid from window.nav."""
@@ -125,62 +168,44 @@ class MiniProgramNavigator:
 
     async def start_capture(self):
         """Enable request capture in the injected navigator hook."""
+        self._capture_requested = True
         await self._ensure()
-        result = await self.engine.evaluate_js(
-            "JSON.stringify(window.nav.startCapture())", timeout=5.0
+        result = await self._call_nav_json(
+            "JSON.stringify(window.nav.startCapture())",
+            timeout=5.0,
         )
-        value = self._extract_value(result)
-        if value:
-            try:
-                return json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return {"ok": False}
+        return result if isinstance(result, dict) else {"ok": False}
 
     async def stop_capture(self):
         """Disable request capture without uninstalling the wx hook."""
+        self._capture_requested = False
         await self._ensure()
-        result = await self.engine.evaluate_js(
-            "JSON.stringify(window.nav.stopCapture())", timeout=5.0
+        result = await self._call_nav_json(
+            "JSON.stringify(window.nav.stopCapture())",
+            timeout=5.0,
         )
-        value = self._extract_value(result)
-        if value:
-            try:
-                return json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return {"ok": False}
+        return result if isinstance(result, dict) else {"ok": False}
 
     async def get_recent_requests(self, limit=50):
         """Return recent captured miniapp requests."""
         await self._ensure()
         limit = max(1, min(int(limit or 50), 200))
-        result = await self.engine.evaluate_js(
+        rows = await self._call_nav_json(
             f"JSON.stringify(window.nav.getCapturedRequests({limit}))",
             timeout=5.0,
         )
-        value = self._extract_value(result)
-        if value:
-            try:
-                rows = json.loads(value)
-                return rows if isinstance(rows, list) else []
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return []
+        if not isinstance(rows, list):
+            raise RuntimeError("captured requests payload is not a list")
+        return rows
 
     async def clear_captured_requests(self):
         """Clear request capture records kept in the miniapp runtime."""
         await self._ensure()
-        result = await self.engine.evaluate_js(
-            "JSON.stringify(window.nav.clearCapturedRequests())", timeout=5.0
+        result = await self._call_nav_json(
+            "JSON.stringify(window.nav.clearCapturedRequests())",
+            timeout=5.0,
         )
-        value = self._extract_value(result)
-        if value:
-            try:
-                return json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return {"ok": False}
+        return result if isinstance(result, dict) else {"ok": False}
 
     async def auto_visit(self, pages, delay=2.0, on_progress=None, cancel_event=None):
         """Visit pages sequentially using safe navigation."""
