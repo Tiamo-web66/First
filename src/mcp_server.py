@@ -100,14 +100,26 @@ class McpHttpService:
                 except Exception as exc:
                     self._send_json(self._rpc_error(None, -32700, f"parse error: {exc}"))
                     return
-                response = self._handle_rpc(request)
+                try:
+                    response = self._handle_rpc(request)
+                except Exception as exc:
+                    response = self._rpc_error(None, -32603, f"internal error: {exc}")
                 self._send_json(response)
 
             def _handle_rpc(self, request):
                 if isinstance(request, list):
+                    if not request:
+                        return self._rpc_error(None, -32600, "invalid request: empty batch")
                     return [self._handle_rpc(item) for item in request]
+                if not isinstance(request, dict):
+                    return self._rpc_error(None, -32600, "invalid request: expected object")
                 req_id = request.get("id")
+                jsonrpc = request.get("jsonrpc")
+                if jsonrpc not in (None, "2.0"):
+                    return self._rpc_error(req_id, -32600, "invalid request: jsonrpc must be '2.0'")
                 method = request.get("method", "")
+                if not isinstance(method, str) or not method:
+                    return self._rpc_error(req_id, -32600, "invalid request: method must be a non-empty string")
                 service.runtime.log(f"tool:{method or 'unknown'} called")
                 if method == "initialize":
                     return self._rpc_result(req_id, {
@@ -121,8 +133,14 @@ class McpHttpService:
                     return self._rpc_result(req_id, {"tools": service.runtime.list_tools()})
                 if method == "tools/call":
                     params = request.get("params", {}) or {}
+                    if not isinstance(params, dict):
+                        return self._rpc_error(req_id, -32600, "invalid request: params must be an object")
                     name = params.get("name", "")
+                    if not isinstance(name, str) or not name:
+                        return self._rpc_error(req_id, -32600, "invalid request: tool name must be a non-empty string")
                     arguments = params.get("arguments", {}) or {}
+                    if not isinstance(arguments, dict):
+                        return self._rpc_error(req_id, -32600, "invalid request: arguments must be an object")
                     result = service.runtime.call_tool(name, arguments)
                     is_error = not bool(result.get("ok", True)) if isinstance(result, dict) else False
                     return self._rpc_result(req_id, {

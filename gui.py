@@ -1150,6 +1150,7 @@ class App(QMainWindow):
         self._mcp_breakpoints = {}
         self._mcp_pause_state = None
         self._mcp_pause_seq = 0
+        self._mcp_wait_pause_since_seq = None
         self._mcp_pause_cv = threading.Condition()
         self._mcp_breakpoint_engine = None
         self._mcp_breakpoint_listener_attached = False
@@ -4412,8 +4413,12 @@ class App(QMainWindow):
         return self._mcp_has_permission("auto_breakpoint")
 
     def _mcp_has_active_breakpoints(self):
-        """Return whether MCP currently has breakpoint state that should be preserved."""
-        return bool(self._mcp_breakpoints)
+        """Return whether the current debugger state should preserve existing breakpoints."""
+        return bool(
+            self._mcp_breakpoints or
+            self._mcp_pause_state or
+            self._devtools_breakpoints_enabled()
+        )
 
     def _mcp_permission_log_name(self, key):
         """格式化 MCP 权限名，并附带中文作用说明供日志展示。"""
@@ -4636,7 +4641,7 @@ class App(QMainWindow):
                 script_id, url, line_number, column_number, condition)
         if name == "wait_for_pause":
             timeout = self._mcp_number_arg(arguments, "timeout", 20.0, 0.1, 120.0)
-            return self._mcp_tool_wait_for_pause(timeout)
+            return self._mcp_tool_wait_for_pause(timeout, arguments.get("since_pause_seq"))
         if name == "resume_execution":
             mode = str(arguments.get("mode", "resume") or "resume")
             return self._mcp_tool_resume_execution(mode)
@@ -4716,6 +4721,10 @@ class App(QMainWindow):
             self._mcp_pause_state = None
             self._mcp_pause_cv.notify_all()
 
+    def _mcp_reset_runtime_script_cache(self):
+        """Clear cached runtime script metadata collected from previous MCP inspections."""
+        self._mcp_runtime_scripts = {}
+
     def _mcp_detach_breakpoint_listeners(self):
         """Detach cached Debugger pause listeners from the current engine when present."""
         engine = self._mcp_breakpoint_engine
@@ -4731,6 +4740,7 @@ class App(QMainWindow):
         self._mcp_breakpoint_engine = None
         self._mcp_breakpoint_listener_attached = False
         self._mcp_breakpoints = {}
+        self._mcp_wait_pause_since_seq = None
         self._mcp_clear_pause_state()
 
     def _mcp_attach_breakpoint_listeners(self):
@@ -5039,7 +5049,7 @@ class App(QMainWindow):
     async def _mcp_collect_runtime_scripts_async(self, wait_seconds=1.5, limit=200):
         """Collect runtime script metadata from CDP Debugger.scriptParsed events."""
         preserve_breakpoints = self._mcp_has_active_breakpoints()
-        script_map = dict(self._mcp_runtime_scripts) if preserve_breakpoints else {}
+        script_map = {}
 
         def _on_parsed(data):
             params = data.get("params", {}) if isinstance(data, dict) else {}
@@ -5066,13 +5076,6 @@ class App(QMainWindow):
                 except Exception:
                     pass
             await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
-            try:
-                await self._engine.send_cdp_command(
-                    "Debugger.setSkipAllPauses",
-                    {"skip": False if preserve_breakpoints else self._devtools_skip_all_pauses()},
-                    timeout=3.0)
-            except Exception:
-                pass
             end_at = asyncio.get_event_loop().time() + wait_seconds
             prev_count = -1
             while asyncio.get_event_loop().time() < end_at:
@@ -5091,13 +5094,8 @@ class App(QMainWindow):
 
     async def _mcp_get_runtime_script_source_async(self, script_id):
         """Read one runtime script source by CDP scriptId."""
-        preserve_breakpoints = self._mcp_has_active_breakpoints()
         try:
             await self._engine.send_cdp_command("Debugger.enable", timeout=5.0)
-            await self._engine.send_cdp_command(
-                "Debugger.setSkipAllPauses",
-                {"skip": False if preserve_breakpoints else self._devtools_skip_all_pauses()},
-                timeout=3.0)
         except Exception:
             pass
         resp = await self._engine.send_cdp_command(
@@ -5387,9 +5385,13 @@ class App(QMainWindow):
                     "column_number": int(column_number),
                     "condition": condition,
                 }
+            with self._mcp_pause_cv:
+                wait_since_seq = self._mcp_pause_seq
+                self._mcp_wait_pause_since_seq = wait_since_seq
             return {
                 "ok": True,
                 "breakpoint_id": breakpoint_id,
+                "since_pause_seq": wait_since_seq,
                 "line_number": int(line_number),
                 "column_number": int(column_number),
                 "locations": normalized,
@@ -5398,7 +5400,7 @@ class App(QMainWindow):
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def _mcp_tool_wait_for_pause(self, timeout):
+    def _mcp_tool_wait_for_pause(self, timeout, since_pause_seq=None):
         """Wait for a Debugger.paused event after user actions trigger an MCP breakpoint."""
         reason = self._mcp_require_auto_breakpoint_pause_mode()
         if reason:
@@ -5409,14 +5411,22 @@ class App(QMainWindow):
             return {"ok": False, "error": str(e)}
         timeout = max(0.1, min(float(timeout or 20.0), 120.0))
         with self._mcp_pause_cv:
-            if self._mcp_pause_state:
+            if since_pause_seq in (None, ""):
+                since_pause_seq = self._mcp_wait_pause_since_seq
+            try:
+                since_pause_seq = int(since_pause_seq or 0)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid since_pause_seq"}
+            if self._mcp_pause_state and int(self._mcp_pause_state.get("pause_seq", 0) or 0) > since_pause_seq:
+                self._mcp_wait_pause_since_seq = None
                 return {"ok": True, "paused": True, **dict(self._mcp_pause_state)}
             end_at = time.monotonic() + timeout
-            while not self._mcp_pause_state:
+            while not self._mcp_pause_state or int(self._mcp_pause_state.get("pause_seq", 0) or 0) <= since_pause_seq:
                 remaining = end_at - time.monotonic()
                 if remaining <= 0:
                     return {"ok": False, "error": "wait for pause timeout"}
                 self._mcp_pause_cv.wait(timeout=remaining)
+            self._mcp_wait_pause_since_seq = None
             return {"ok": True, "paused": True, **dict(self._mcp_pause_state)}
 
     def _mcp_tool_resume_execution(self, mode):
@@ -5805,6 +5815,7 @@ class App(QMainWindow):
 
     def _on_fail(self):
         self._mcp_detach_breakpoint_listeners()
+        self._mcp_reset_runtime_script_cache()
         self._running = False
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
@@ -5828,6 +5839,7 @@ class App(QMainWindow):
         if not self._running:
             return
         self._mcp_detach_breakpoint_listeners()
+        self._mcp_reset_runtime_script_cache()
         self._running = False
         self._poll_route_stop()
         if self._cloud_scan_active:
@@ -6706,6 +6718,8 @@ class App(QMainWindow):
             aid = info.get("appid", "")
             aname = info.get("name", "")
             ent = info.get("entry", "")
+            if aid and self._current_app_id and aid != self._current_app_id:
+                self._mcp_reset_runtime_script_cache()
             self._current_app_name = aname
             self._current_app_id = aid
             self._mcp_appid = aid

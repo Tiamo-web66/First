@@ -111,6 +111,7 @@ BASIC_TOOLS = [
             "type": "object",
             "properties": {
                 "timeout": {"type": "number", "description": "Maximum seconds to wait, capped at 120."},
+                "since_pause_seq": {"type": "number", "description": "Optional pause sequence baseline returned by set_auto_breakpoint. Only pauses with a larger sequence will match."},
             },
         },
     },
