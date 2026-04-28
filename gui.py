@@ -335,6 +335,30 @@ def build_qss(tn):
         background: {"#1d2536" if tn == "dark" else "#edf2f8"};
         color: {"#68758f" if tn == "dark" else "#9aa6b8"};
     }}
+    QPushButton#devtools_copy_btn {{
+        background: {c['input']};
+        color: {c['accent']};
+        border: 1px solid {c['border2']};
+        border-radius: 10px;
+        padding: 3px 12px;
+        font-size: 9px;
+        min-height: 18px;
+    }}
+    QPushButton#devtools_copy_btn:hover {{
+        background: {c['sb_hover']};
+        border: 1px solid {c['accent']};
+    }}
+    QPushButton#devtools_copy_btn:pressed {{
+        background: {c['accent']};
+        color: {"#ffffff" if tn == "light" else "#111118"};
+        padding-top: 4px;
+        padding-bottom: 2px;
+    }}
+    QPushButton#devtools_copy_btn:disabled {{
+        background: transparent;
+        color: {c['text4']};
+        border: 1px solid {c['border']};
+    }}
     /* 表格内按钮 — 清除全局样式，由 inline setStyleSheet 控制 */
     QTableWidget QPushButton {{
         background: transparent;
@@ -1411,9 +1435,14 @@ class App(QMainWindow):
         self._devtools_lbl.setStyleSheet(f"color: {_TH[self._tn]['text3']};")
         self._devtools_lbl.mousePressEvent = lambda e: self._copy_devtools_url()
         dt_row.addWidget(self._devtools_lbl)
-        self._devtools_copy_hint = QLabel("")
-        self._devtools_copy_hint.setProperty("class", "muted")
+        self._devtools_copy_hint = QPushButton("点击复制")
+        self._devtools_copy_hint.setObjectName("devtools_copy_btn")
         self._devtools_copy_hint.setFont(QFont(_FN, 8))
+        self._devtools_copy_hint.setCursor(Qt.PointingHandCursor)
+        self._devtools_copy_hint.setToolTip("复制 DevTools 调试链接")
+        self._devtools_copy_hint.clicked.connect(self._copy_devtools_url)
+        self._devtools_copy_hint.setEnabled(False)
+        self._devtools_copy_hint.setVisible(False)
         dt_row.addWidget(self._devtools_copy_hint)
         dt_row.addStretch()
         c1_lay.addLayout(dt_row)
@@ -5205,18 +5234,30 @@ class App(QMainWindow):
         """复制当前 DevTools 调试链接到剪贴板，并短暂显示复制状态。"""
         url = self._devtools_lbl.text()
         if not url.startswith("devtools://"):
-            self._devtools_copy_hint.setText("未生成")
-            self._devtools_copy_hint.setStyleSheet(f"color: {_TH[self._tn]['text3']};")
+            self._set_devtools_copy_button("未生成", False)
             return
         QApplication.clipboard().setText(url)
-        c = _TH[self._tn]
-        self._devtools_copy_hint.setText("已复制!")
-        self._devtools_copy_hint.setStyleSheet(f"color: {c['success']};")
+        self._set_devtools_copy_button("已复制!", True, "success")
         QTimer.singleShot(1500, lambda: (
-            self._devtools_copy_hint.setText("点击复制"),
-            self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
+            self._set_devtools_copy_button("点击复制", True)
         ))
         self._log_add("info", "[gui] DevTools 链接已复制到剪贴板")
+
+    def _set_devtools_copy_button(self, text, enabled, mode="normal"):
+        """刷新 DevTools 复制胶囊按钮的文字、可用状态和临时强调色。"""
+        btn = getattr(self, "_devtools_copy_hint", None)
+        if not btn:
+            return
+        btn.setText(text)
+        btn.setEnabled(enabled)
+        btn.setVisible(bool(text))
+        if mode == "success":
+            c = _TH[self._tn]
+            btn.setStyleSheet(
+                f"QPushButton#devtools_copy_btn {{ color: {c['success']}; border: 1px solid {c['success']}; }}"
+            )
+        else:
+            btn.setStyleSheet("")
 
     def _copy_logs(self):
         """复制当前筛选后的运行日志纯文本到剪贴板。"""
@@ -5421,8 +5462,7 @@ class App(QMainWindow):
         self._devtools_lbl.setToolTip(url)
         c = _TH[self._tn]
         self._devtools_lbl.setStyleSheet(f"color: {c['accent']};")
-        self._devtools_copy_hint.setText("点击复制")
-        self._devtools_copy_hint.setStyleSheet(f"color: {c['text3']};")
+        self._set_devtools_copy_button("点击复制", True)
         self._log_add("info", f"[gui] 浏览器访问: {url}")
         self._update_flow_steps()
         self._hook_refresh()
@@ -5448,7 +5488,7 @@ class App(QMainWindow):
         self._devtools_lbl.setText("未生成")
         self._devtools_lbl.setToolTip("启动调试后生成 DevTools 调试链接")
         self._devtools_lbl.setStyleSheet(f"color: {c['text3']};")
-        self._devtools_copy_hint.setText("")
+        self._set_devtools_copy_button("", False)
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         self._update_flow_steps()
@@ -5486,7 +5526,7 @@ class App(QMainWindow):
         self._devtools_lbl.setText("未生成")
         self._devtools_lbl.setToolTip("启动调试后生成 DevTools 调试链接")
         self._devtools_lbl.setStyleSheet(f"color: {c['text3']};")
-        self._devtools_copy_hint.setText("")
+        self._set_devtools_copy_button("", False)
         # 引擎停止，清除顶部目标信息和运行状态卡片的小程序信息
         self._current_app_name = ""
         self._current_app_id = ""
