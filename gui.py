@@ -1681,6 +1681,10 @@ class App(QMainWindow):
         perm_hdr = QHBoxLayout()
         perm_hdr.addWidget(_make_label("权限开关", bold=True))
         perm_hdr.addStretch()
+        self._btn_mcp_copy_perms = _make_btn("复制权限", self._copy_mcp_permissions)
+        perm_hdr.addWidget(self._btn_mcp_copy_perms)
+        self._btn_mcp_reset_perms = _make_btn("恢复默认", self._reset_mcp_permissions)
+        perm_hdr.addWidget(self._btn_mcp_reset_perms)
         perm_lay.addLayout(perm_hdr)
 
         perm_tip = QLabel("读取类能力默认允许；自动访问、探针注入、云函数调用等高影响能力需单独开启。")
@@ -1714,6 +1718,8 @@ class App(QMainWindow):
         log_hdr = QHBoxLayout()
         log_hdr.addWidget(_make_label("MCP 日志", bold=True))
         log_hdr.addStretch()
+        self._btn_mcp_copy_log = _make_btn("复制日志", self._copy_mcp_log)
+        log_hdr.addWidget(self._btn_mcp_copy_log)
         self._btn_mcp_clear_log = _make_btn("清空", self._clear_mcp_log)
         log_hdr.addWidget(self._btn_mcp_clear_log)
         log_lay.addLayout(log_hdr)
@@ -2423,8 +2429,8 @@ class App(QMainWindow):
                     self._ext_q.put(obj)
                 except json.JSONDecodeError:
                     self._ext_q.put({"type": "log", "msg": line})
-        except Exception:
-            pass
+        except Exception as e:
+            self._rte_q.put(("__vc_detect_failed__", str(e)))
         finally:
             proc.wait()
             stderr_out = ""
@@ -3081,6 +3087,11 @@ class App(QMainWindow):
         self._btn_vc_disable.setFont(QFont(_FN, 10, QFont.Bold))
         self._btn_vc_disable.setEnabled(False)
         btn_row.addWidget(self._btn_vc_disable)
+        self._btn_vc_detect = _make_btn("检测状态", self._do_vc_detect)
+        self._btn_vc_detect.setEnabled(False)
+        btn_row.addWidget(self._btn_vc_detect)
+        self._btn_vc_copy = _make_btn("复制状态", self._copy_vc_status)
+        btn_row.addWidget(self._btn_vc_copy)
         btn_row.addStretch()
         op_lay.addLayout(btn_row)
         op_tip = QLabel("连接小程序后会自动检测当前调试状态，切换结果通常需要重启小程序后完全生效。")
@@ -3138,6 +3149,30 @@ class App(QMainWindow):
             return
         self._btn_vc_disable.setEnabled(False)
         asyncio.run_coroutine_threadsafe(self._avc_set_debug(False), self._loop)
+
+    def _do_vc_detect(self):
+        """手动检测当前小程序 vConsole 调试状态。"""
+        if not self._engine or not self._loop or not self._loop.is_running():
+            self._log_add("error", "[调试] 请先启动调试并连接小程序")
+            return
+        self._vc_status_lbl.setText("状态: 正在检测...")
+        self._vc_status_lbl.setProperty("class", "muted")
+        self._btn_vc_detect.setEnabled(False)
+        asyncio.run_coroutine_threadsafe(self._avc_detect_debug(), self._loop)
+
+    def _copy_vc_status(self):
+        """复制当前调试开关页面的状态快照到剪贴板。"""
+        status = self._vc_status_lbl.text() if hasattr(self, "_vc_status_lbl") else "状态: --"
+        data = {
+            "vconsole": status.replace("状态:", "").strip(),
+            "miniapp_connected": bool(self._miniapp_connected),
+            "app_name": self._current_app_name or "",
+            "appid": self._current_app_id or "",
+            "cdp_port": self._cp_ent.text() if hasattr(self, "_cp_ent") else "",
+            "devtools_breakpoints": "allow" if self._devtools_breakpoints_enabled() else "skip",
+        }
+        QApplication.clipboard().setText(json.dumps(data, ensure_ascii=False, indent=2))
+        self._log_add("info", "[调试] 状态快照已复制到剪贴板")
 
     async def _avc_set_debug(self, enable):
         try:
@@ -3494,6 +3529,31 @@ class App(QMainWindow):
         self._mcp_add_log(f"权限变更: {label} -> {'允许' if enabled else '禁止'}")
         self._auto_save()
 
+    def _copy_mcp_permissions(self):
+        """复制当前 MCP 权限配置，包含权限键名、显示名称和启用状态。"""
+        data = [
+            {
+                "key": key,
+                "label": label,
+                "enabled": bool(self._mcp_permissions.get(key, default)),
+            }
+            for key, label, default in _MCP_PERMISSIONS
+        ]
+        QApplication.clipboard().setText(json.dumps(data, ensure_ascii=False, indent=2))
+        self._mcp_add_log("已复制 MCP 权限配置")
+        self._log_add("info", "[MCP] 权限配置已复制到剪贴板")
+
+    def _reset_mcp_permissions(self):
+        """将 MCP 权限恢复为内置默认值，并同步刷新所有开关控件。"""
+        self._mcp_permissions = {key: default for key, _, default in _MCP_PERMISSIONS}
+        for key, toggle in self._mcp_permission_toggles.items():
+            toggle.blockSignals(True)
+            toggle.setChecked(bool(self._mcp_permissions.get(key, False)))
+            toggle.blockSignals(False)
+        self._mcp_add_log("MCP 权限已恢复默认配置")
+        self._log_add("info", "[MCP] 权限已恢复默认配置")
+        self._auto_save()
+
     def _mcp_has_permission(self, key):
         """Return whether a named MCP capability is enabled."""
         return bool(self._mcp_permissions.get(key, False))
@@ -3518,6 +3578,17 @@ class App(QMainWindow):
         """Clear the MCP page log box."""
         if hasattr(self, "_mcp_logbox"):
             self._mcp_logbox.clear()
+
+    def _copy_mcp_log(self):
+        """复制 MCP 页面当前日志文本到剪贴板。"""
+        box = getattr(self, "_mcp_logbox", None)
+        text = box.toPlainText().strip() if box else ""
+        if not text:
+            self._mcp_add_log("当前没有可复制的 MCP 日志")
+            return
+        QApplication.clipboard().setText(text)
+        self._mcp_add_log("已复制 MCP 日志")
+        self._log_add("info", "[MCP] MCP 日志已复制到剪贴板")
 
     def _copy_mcp_address(self):
         """Copy the configured MCP endpoint URL to the clipboard."""
@@ -4546,6 +4617,9 @@ class App(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._btn_fetch.setEnabled(False)
         self._nav_btns(False)
+        self._btn_vc_enable.setEnabled(False)
+        self._btn_vc_disable.setEnabled(False)
+        self._btn_vc_detect.setEnabled(False)
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
 
@@ -4568,6 +4642,10 @@ class App(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._btn_fetch.setEnabled(False)
         self._nav_btns(False)
+        self._btn_vc_enable.setEnabled(False)
+        self._btn_vc_disable.setEnabled(False)
+        self._btn_vc_detect.setEnabled(False)
+        self._vc_status_lbl.setText("状态: 未连接小程序")
         self._btn_autostop.setEnabled(False)
         self._redirect_guard_on = False
         self._guard_switch.setChecked(False)
@@ -4650,6 +4728,7 @@ class App(QMainWindow):
         self._nav_btns(True)
         self._btn_vc_enable.setEnabled(True)
         self._btn_vc_disable.setEnabled(True)
+        self._btn_vc_detect.setEnabled(True)
         self._vc_status_lbl.setText("状态: 就绪")
         # 自动检测 vConsole 调试状态
         if self._engine and self._loop and self._loop.is_running():
@@ -5310,6 +5389,7 @@ class App(QMainWindow):
                 self._nav_btns(False)
             self._btn_vc_enable.setEnabled(False)
             self._btn_vc_disable.setEnabled(False)
+            self._btn_vc_detect.setEnabled(False)
             self._vc_status_lbl.setText("状态: 未连接小程序")
             # 清除注入标记，切换小程序时全局脚本会重新注入
             self._hook_injected.clear()
@@ -5407,6 +5487,7 @@ class App(QMainWindow):
                 self._vc_status_lbl.setStyleSheet(f"color: {c['error']};")
             self._btn_vc_enable.setEnabled(True)
             self._btn_vc_disable.setEnabled(True)
+            self._btn_vc_detect.setEnabled(True)
         elif kind == "__vc_detect__":
             is_debug = item[1]
             c = _TH[self._tn]
@@ -5416,6 +5497,12 @@ class App(QMainWindow):
             else:
                 self._vc_status_lbl.setText("状态: 未开启")
                 self._vc_status_lbl.setStyleSheet(f"color: {c['text3']};")
+            self._btn_vc_detect.setEnabled(True)
+        elif kind == "__vc_detect_failed__":
+            self._vc_status_lbl.setText("状态: 检测失败")
+            self._vc_status_lbl.setStyleSheet(f"color: {_TH[self._tn]['error']};")
+            self._btn_vc_detect.setEnabled(True)
+            self._log_add("error", f"[调试] 状态检测失败: {item[1]}")
 
     def _handle_cld(self, item):
         kind = item[0]
