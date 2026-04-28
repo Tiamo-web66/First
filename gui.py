@@ -317,7 +317,7 @@ def build_qss(tn):
     /* ── 按钮 ── */
     QPushButton {{
         background: {c['accent']};
-        color: #111118;
+        color: {"#ffffff" if tn == "light" else "#111118"};
         border: none;
         border-radius: 8px;
         padding: 5px 16px;
@@ -740,6 +740,44 @@ class StatusDot(QWidget):
         p.setPen(Qt.NoPen)
         p.setBrush(self._color)
         p.drawEllipse(1, 1, 8, 8)
+
+
+class CheckMarkBox(QCheckBox):
+    """绘制带对号的复选框，用于避免 checked 状态显示为实心填充块。"""
+
+    def __init__(self, text="", theme="dark", parent=None):
+        """初始化复选框文本和主题。"""
+        super().__init__(text, parent)
+        self._theme = theme
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_theme(self, theme):
+        """切换复选框主题色并重绘。"""
+        self._theme = theme
+        self.update()
+
+    def paintEvent(self, e):
+        """绘制圆角方框、选中对号和右侧文本。"""
+        c = _TH.get(self._theme, _D)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        box = 14
+        x = 1
+        y = (self.height() - box) // 2
+        checked = self.isChecked()
+        p.setPen(QPen(QColor(c["accent"] if checked else c["border2"]), 1.4))
+        p.setBrush(QColor(c["accent"] if checked else c["input"]))
+        p.drawRoundedRect(x, y, box, box, 3, 3)
+        if checked:
+            pen = QPen(QColor("#ffffff"), 2)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.drawLine(x + 4, y + 7, x + 6, y + 10)
+            p.drawLine(x + 6, y + 10, x + 11, y + 4)
+        p.setPen(QColor(c["text1"]))
+        p.setFont(self.font())
+        p.drawText(x + box + 7, 0, self.width() - box - 7, self.height(), Qt.AlignVCenter, self.text())
 
 
 class ThemeIcon(QWidget):
@@ -3877,8 +3915,9 @@ class App(QMainWindow):
         self._btn_clear_log_filter = _make_btn("清除筛选", self._clear_log_filter)
         self._btn_clear_log_filter.setEnabled(False)
         filter_row.addWidget(self._btn_clear_log_filter)
-        self._log_autoscroll_cb = QCheckBox("自动滚动")
+        self._log_autoscroll_cb = CheckMarkBox("自动滚动", self._tn)
         self._log_autoscroll_cb.setChecked(True)
+        self._log_autoscroll_cb.setToolTip("勾选后日志追加时自动滚动到底部")
         filter_row.addWidget(self._log_autoscroll_cb)
         self._log_count_lbl = QLabel("0 条")
         self._log_count_lbl.setProperty("class", "muted")
@@ -4129,6 +4168,8 @@ class App(QMainWindow):
             tog.set_colors(c["accent"], c["text4"])
         for tog in getattr(self, "_mcp_permission_toggles", {}).values():
             tog.set_colors(c["accent"], c["text4"])
+        if hasattr(self, "_log_autoscroll_cb"):
+            self._log_autoscroll_cb.set_theme(self._tn)
 
     def _refresh_sb_app_card(self):
         """主题切换时刷新顶部 Hook 目标信息条。"""
