@@ -90,6 +90,52 @@ BASIC_TOOLS = [
         },
     },
     {
+        "name": "set_auto_breakpoint",
+        "description": "Set an automatic breakpoint by script_id or runtime script URL, then wait for user actions to hit it. Requires the automatic breakpoint permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "script_id": {"type": "string", "description": "CDP Debugger scriptId returned by list_runtime_scripts. Preferred when available."},
+                "url": {"type": "string", "description": "Runtime script URL used when script_id is not provided."},
+                "line_number": {"type": "number", "description": "1-based source line number to break on."},
+                "column_number": {"type": "number", "description": "0-based source column number. Defaults to 0."},
+                "condition": {"type": "string", "description": "Optional JavaScript breakpoint condition."},
+            },
+            "required": ["line_number"],
+        },
+    },
+    {
+        "name": "wait_for_pause",
+        "description": "Wait until the miniapp runtime hits a breakpoint or another debugger pause. Requires the automatic breakpoint permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "timeout": {"type": "number", "description": "Maximum seconds to wait, capped at 120."},
+            },
+        },
+    },
+    {
+        "name": "resume_execution",
+        "description": "Resume or single-step the paused miniapp runtime after a breakpoint hit. Requires the automatic breakpoint permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "description": "One of resume, step_over, step_into, or step_out."},
+            },
+        },
+    },
+    {
+        "name": "remove_breakpoint",
+        "description": "Remove one previously created automatic breakpoint by breakpoint_id. Requires the automatic breakpoint permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "breakpoint_id": {"type": "string", "description": "Breakpoint id returned by set_auto_breakpoint."},
+            },
+            "required": ["breakpoint_id"],
+        },
+    },
+    {
         "name": "search_runtime_scripts",
         "description": "Search runtime JavaScript source for a literal keyword. Requires the read scripts permission.",
         "inputSchema": {
