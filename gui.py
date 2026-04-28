@@ -4631,6 +4631,18 @@ class App(QMainWindow):
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
             return self._mcp_tool_clear_requests()
+        if name == "get_recent_cloud_calls":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            try:
+                limit = int(arguments.get("limit", 50) or 50)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid limit"}
+            return self._mcp_tool_get_recent_cloud_calls(limit)
+        if name == "clear_cloud_calls":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_clear_cloud_calls()
         if name == "list_runtime_scripts":
             if not self._mcp_require_permission("read_scripts"):
                 return {"ok": False, "error": "permission denied: read_scripts"}
@@ -4917,6 +4929,33 @@ class App(QMainWindow):
             return {"ok": False, "error": reason}
         try:
             result = self._mcp_run_coro(self._navigator.clear_captured_requests(), 6.0)
+            return result if isinstance(result, dict) else {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_get_recent_cloud_calls(self, limit):
+        """Read recent captured cloud, database, storage, or container calls."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        if not self._auditor:
+            return {"ok": False, "error": "cloud auditor not available"}
+        limit = max(1, min(int(limit or 50), 200))
+        try:
+            rows = self._mcp_run_coro(self._auditor.get_recent_calls(limit), 8.0)
+            return {"ok": True, "calls": rows, "count": len(rows)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_clear_cloud_calls(self):
+        """Clear captured cloud, database, storage, and container call records."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        if not self._auditor:
+            return {"ok": False, "error": "cloud auditor not available"}
+        try:
+            result = self._mcp_run_coro(self._auditor.clear_calls(), 6.0)
             return result if isinstance(result, dict) else {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}

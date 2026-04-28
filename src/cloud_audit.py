@@ -52,6 +52,68 @@ class CloudAuditor:
         except Exception:
             pass
 
+    async def _ensure_hook_ready(self):
+        """Ensure the cloud hook is installed in the current miniapp runtime."""
+        await self.inject()
+        if not self._enabled:
+            info = await self.start()
+            if not info.get("ok"):
+                raise RuntimeError(info.get("reason") or "cloud hook not available")
+            return
+        alive_result = await self.engine.evaluate_js(
+            "(function(){try{return window.cloudAudit&&window.cloudAudit._hooked?'1':'0'}catch(e){return '0'}})()",
+            timeout=3.0)
+        alive = self._extract_value(alive_result)
+        if alive == "1":
+            return
+        result = await self.engine.evaluate_js(
+            "JSON.stringify(window.cloudAudit.installHook())", timeout=5.0)
+        value = self._extract_value(result)
+        if not value:
+            raise RuntimeError("cloud hook reinstall returned no value")
+        try:
+            info = json.loads(value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"cloud hook reinstall returned invalid JSON: {exc}") from exc
+        if not info.get("ok"):
+            raise RuntimeError(info.get("reason") or "cloud hook reinstall failed")
+        self._seen_count = 0
+
+    async def get_recent_calls(self, limit=50):
+        """Read recent captured cloud, database, storage, or container call records."""
+        await self._ensure_hook_ready()
+        limit = max(1, min(int(limit or 50), 200))
+        result = await self.engine.evaluate_js(
+            "JSON.stringify(window.cloudAudit.getHookedCalls())", timeout=5.0)
+        value = self._extract_value(result)
+        if value is None:
+            raise RuntimeError("cloud call capture returned no value")
+        try:
+            calls = json.loads(value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"cloud call capture returned invalid JSON: {exc}") from exc
+        if not isinstance(calls, list):
+            raise RuntimeError("cloud call capture payload is not a list")
+        return calls[-limit:]
+
+    async def clear_calls(self):
+        """Clear captured cloud, database, storage, and container call records."""
+        await self._ensure_hook_ready()
+        self._seen_count = 0
+        result = await self.engine.evaluate_js(
+            "JSON.stringify((function(){window.cloudAudit.clearHookedCalls();return {ok:true};})())",
+            timeout=3.0)
+        value = self._extract_value(result)
+        if value is None:
+            raise RuntimeError("cloud call clear returned no value")
+        try:
+            info = json.loads(value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"cloud call clear returned invalid JSON: {exc}") from exc
+        if not isinstance(info, dict) or not info.get("ok"):
+            raise RuntimeError("cloud call clear failed")
+        return info
+
     async def poll(self):
         """拉取新捕获的云函数调用，只返回增量。
         自动检测 Hook 是否丢失（页面切换后），并重新注入。
@@ -93,6 +155,26 @@ class CloudAuditor:
                 "window.cloudAudit.clearHookedCalls()", timeout=3.0)
         except Exception:
             pass
+
+    async def poll(self):
+        """Poll incremental cloud capture records while the background hook is enabled."""
+        if not self._enabled:
+            return []
+        try:
+            await self._ensure_hook_ready()
+            result = await self.engine.evaluate_js(
+                "JSON.stringify(window.cloudAudit.getHookedCalls())", timeout=5.0)
+            value = self._extract_value(result)
+            if not value:
+                return []
+            calls = json.loads(value)
+            if len(calls) <= self._seen_count:
+                return []
+            new_calls = calls[self._seen_count:]
+            self._seen_count = len(calls)
+            return new_calls
+        except Exception:
+            return []
 
     async def static_scan(self, on_progress=None):
         """静态扫描：通过 CDP Debugger 获取 JS 源码，提取云函数引用"""

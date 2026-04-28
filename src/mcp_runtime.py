@@ -66,6 +66,21 @@ BASIC_TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_recent_cloud_calls",
+        "description": "Read recent captured miniapp cloud, database, storage, or container calls. Requires the read requests permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number", "description": "Maximum number of recent records to return, capped at 200."},
+            },
+        },
+    },
+    {
+        "name": "clear_cloud_calls",
+        "description": "Clear captured cloud, database, storage, and container call records from the miniapp runtime.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "list_runtime_scripts",
         "description": "Collect and list JavaScript scripts currently known to the miniapp runtime. Requires the read scripts permission.",
         "inputSchema": {
