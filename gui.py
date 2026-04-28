@@ -300,8 +300,8 @@ def build_qss(tn):
         background: {c['accent2']};
     }}
     QPushButton:disabled {{
-        background: {"#1a3a2a" if tn == "dark" else "#b0dfc0"};
-        color: {"#3a6a4a" if tn == "dark" else "#5a8a6a"};
+        background: {"#1d2536" if tn == "dark" else "#edf2f8"};
+        color: {"#68758f" if tn == "dark" else "#9aa6b8"};
     }}
     /* 表格内按钮 — 清除全局样式，由 inline setStyleSheet 控制 */
     QTableWidget QPushButton {{
@@ -1072,30 +1072,24 @@ class App(QMainWindow):
     def _build_navigator(self):
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setSpacing(14)
 
-        # 搜索栏
+        top_card = _make_card()
+        top_lay = QVBoxLayout(top_card)
+        top_lay.setContentsMargins(18, 14, 18, 14)
+        top_lay.setSpacing(10)
+
         sf = QHBoxLayout()
-        sf.addWidget(QLabel("搜索"))
+        sf.addWidget(_make_label("路由搜索", bold=True))
         self._srch_ent = _make_entry("输入路由关键字搜索...")
         self._srch_ent.textChanged.connect(self._do_filter)
         sf.addWidget(self._srch_ent, 1)
-        lay.addLayout(sf)
+        self._btn_fetch = _make_btn("获取路由", self._do_fetch)
+        self._btn_fetch.setEnabled(False)
+        sf.addWidget(self._btn_fetch)
+        top_lay.addLayout(sf)
 
-        # 路由树
-        tc = _make_card()
-        tc_lay = QVBoxLayout(tc)
-        tc_lay.setContentsMargins(0, 0, 0, 0)
-        self._tree = QTreeWidget()
-        self._tree.setHeaderHidden(True)
-        self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
-        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._tree.customContextMenuRequested.connect(self._nav_context_menu)
-        tc_lay.addWidget(self._tree)
-        lay.addWidget(tc, 1)
-
-        # 手动输入跳转
         mi = QHBoxLayout()
         mi.addWidget(QLabel("手动跳转"))
         self._nav_input = _make_entry("输入路由路径，回车跳转...")
@@ -1106,10 +1100,34 @@ class App(QMainWindow):
         self._btn_copy_route = _make_btn("复制路由", self._do_copy_route)
         self._btn_copy_route.setEnabled(False)
         mi.addWidget(self._btn_copy_route)
-        lay.addLayout(mi)
+        top_lay.addLayout(mi)
+        lay.addWidget(top_card)
 
-        # 导航按钮行 1
+        tc = _make_card()
+        tc_lay = QVBoxLayout(tc)
+        tc_lay.setContentsMargins(16, 12, 16, 12)
+        tc_lay.setSpacing(8)
+        tree_hdr = QHBoxLayout()
+        tree_hdr.addWidget(_make_label("路由列表", bold=True))
+        tree_hdr.addStretch()
+        self._route_lbl = QLabel("当前路由: --")
+        self._route_lbl.setProperty("class", "muted")
+        tree_hdr.addWidget(self._route_lbl)
+        tc_lay.addLayout(tree_hdr)
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._nav_context_menu)
+        tc_lay.addWidget(self._tree)
+        lay.addWidget(tc, 1)
+
+        op_card = _make_card()
+        op_lay = QVBoxLayout(op_card)
+        op_lay.setContentsMargins(18, 12, 18, 12)
+        op_lay.setSpacing(10)
         b1 = QHBoxLayout()
+        b1.addWidget(_make_label("页面操作", bold=True))
         self._btn_go = _make_btn("跳转", self._do_go)
         self._btn_go.setEnabled(False)
         b1.addWidget(self._btn_go)
@@ -1123,20 +1141,16 @@ class App(QMainWindow):
         self._btn_refresh.setEnabled(False)
         b1.addWidget(self._btn_refresh)
         b1.addStretch()
-        self._btn_fetch = _make_btn("获取路由", self._do_fetch)
-        self._btn_fetch.setEnabled(False)
-        b1.addWidget(self._btn_fetch)
-        lay.addLayout(b1)
+        op_lay.addLayout(b1)
 
-        # 导航按钮行 2: 上一个/下一个 + 遍历 + 防跳转
         b2 = QHBoxLayout()
-        self._btn_prev = _make_btn("◀ 上一个", self._do_prev)
+        b2.addWidget(_make_label("遍历与保护", bold=True))
+        self._btn_prev = _make_btn("上一个", self._do_prev)
         self._btn_prev.setEnabled(False)
         b2.addWidget(self._btn_prev)
-        self._btn_next = _make_btn("下一个 ▶", self._do_next)
+        self._btn_next = _make_btn("下一个", self._do_next)
         self._btn_next.setEnabled(False)
         b2.addWidget(self._btn_next)
-        b2.addSpacing(12)
         self._btn_auto = _make_btn("自动遍历", self._do_autovis)
         self._btn_auto.setEnabled(False)
         b2.addWidget(self._btn_auto)
@@ -1152,18 +1166,15 @@ class App(QMainWindow):
         self._guard_label = QLabel("防跳转: 关闭")
         b2.addWidget(self._guard_label)
         b2.addStretch()
-        lay.addLayout(b2)
+        op_lay.addLayout(b2)
 
         self._prog = QProgressBar()
         self._prog.setMaximum(100)
         self._prog.setValue(0)
         self._prog.setTextVisible(False)
         self._prog.setFixedHeight(6)
-        lay.addWidget(self._prog)
-        self._route_lbl = QLabel("当前路由: --")
-        self._route_lbl.setFixedHeight(22)
-        self._route_lbl.setProperty("class", "bold")
-        lay.addWidget(self._route_lbl)
+        op_lay.addWidget(self._prog)
+        lay.addWidget(op_card)
 
         self._stack.addWidget(page)
         self._page_map["navigator"] = self._stack.count() - 1
@@ -1173,22 +1184,36 @@ class App(QMainWindow):
     def _build_hook(self):
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setSpacing(14)
 
+        top_card = _make_card()
+        top_lay = QVBoxLayout(top_card)
+        top_lay.setContentsMargins(18, 14, 18, 14)
+        top_lay.setSpacing(8)
+        top_lay.addWidget(_make_label("Hook 脚本", bold=True))
         tip_row = QHBoxLayout()
         self._hook_tip = QLabel("将 .js 文件放入 hook_scripts/ 目录，点击「注入」即时执行")
         self._hook_tip.setProperty("class", "muted")
+        self._hook_tip.setWordWrap(True)
         tip_row.addWidget(self._hook_tip)
         tip_row.addStretch()
         self._btn_hook_refresh = _make_btn("刷新列表", self._hook_refresh)
         tip_row.addWidget(self._btn_hook_refresh)
-        lay.addLayout(tip_row)
+        top_lay.addLayout(tip_row)
+        lay.addWidget(top_card)
 
         c1 = _make_card()
         c1_lay = QVBoxLayout(c1)
-        c1_lay.setContentsMargins(12, 12, 12, 12)
-        c1_lay.setSpacing(6)
+        c1_lay.setContentsMargins(16, 12, 16, 12)
+        c1_lay.setSpacing(8)
+        hdr = QHBoxLayout()
+        hdr.addWidget(_make_label("脚本列表", bold=True))
+        hdr.addStretch()
+        self._hook_count_lbl = QLabel("")
+        self._hook_count_lbl.setProperty("class", "muted")
+        hdr.addWidget(self._hook_count_lbl)
+        c1_lay.addLayout(hdr)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1217,9 +1242,12 @@ class App(QMainWindow):
 
         hook_dir = os.path.join(_BASE_DIR, "hook_scripts")
         js_files = sorted(f for f in os.listdir(hook_dir) if f.endswith(".js")) if os.path.isdir(hook_dir) else []
+        if hasattr(self, "_hook_count_lbl"):
+            self._hook_count_lbl.setText(f"{len(js_files)} 个脚本")
 
         if not js_files:
             lbl = QLabel("hook_scripts/ 目录下无 .js 文件")
+            lbl.setProperty("class", "muted")
             lbl.setAlignment(Qt.AlignCenter)
             self._hook_inner_lay.insertWidget(0, lbl)
             return
@@ -1227,21 +1255,28 @@ class App(QMainWindow):
         for fn in js_files:
             row = QFrame()
             row.setProperty("class", "hook_row")
-            row.setFixedHeight(52)
+            row.setFixedHeight(66)
             row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(12, 0, 12, 0)
-            row_lay.setSpacing(8)
+            row_lay.setContentsMargins(14, 0, 14, 0)
+            row_lay.setSpacing(12)
 
             icon_lbl = QLabel("JS")
             icon_lbl.setProperty("class", "js_badge")
             icon_lbl.setFont(QFont(_FM, 8, QFont.Bold))
-            icon_lbl.setFixedWidth(30)
+            icon_lbl.setFixedSize(34, 24)
             icon_lbl.setAlignment(Qt.AlignCenter)
             row_lay.addWidget(icon_lbl)
 
+            name_box = QVBoxLayout()
+            name_box.setSpacing(2)
             name_lbl = QLabel(fn)
-            name_lbl.setFont(QFont(_FN, 10))
-            row_lay.addWidget(name_lbl, 1)
+            name_lbl.setFont(QFont(_FN, 10, QFont.Bold))
+            name_box.addWidget(name_lbl)
+            path_lbl = QLabel(os.path.join("hook_scripts", fn))
+            path_lbl.setProperty("class", "muted")
+            path_lbl.setFont(QFont(_FN, 8))
+            name_box.addWidget(path_lbl)
+            row_lay.addLayout(name_box, 1)
 
             is_global = fn in self._global_hook_scripts
             injected = fn in self._hook_injected
@@ -1256,6 +1291,7 @@ class App(QMainWindow):
             status_lbl = QLabel(status_text)
             c = _TH[self._tn]
             status_lbl.setStyleSheet(f"color: {c['success'] if injected else c['text3']};")
+            status_lbl.setMinimumWidth(90)
             row_lay.addWidget(status_lbl)
             self._hook_status_lbls[fn] = status_lbl
 
