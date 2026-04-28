@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QProgressBar, QStackedWidget,
     QMenu, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog,
     QTabWidget, QTableWidget, QTableWidgetItem, QDialog, QSizePolicy,
-    QCheckBox,
+    QCheckBox, QGridLayout,
 )
 
 from src.cli import CliOptions, CDP_PORT
@@ -1060,6 +1060,7 @@ class App(QMainWindow):
         log_lay.addLayout(log_hdr)
         self._control_logbox = QTextEdit()
         self._control_logbox.setReadOnly(True)
+        self._control_logbox.setPlaceholderText("运行日志会显示在这里。")
         self._control_logbox.setFont(QFont(_FM, 9))
         log_lay.addWidget(self._control_logbox, 1)
         lay.addWidget(log_card, 1)
@@ -1070,6 +1071,7 @@ class App(QMainWindow):
     # ── 路由导航 ──
 
     def _build_navigator(self):
+        """构建路由导航页面，提供路由获取、搜索、跳转、遍历和空状态提示。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 18, 24, 18)
@@ -1109,12 +1111,20 @@ class App(QMainWindow):
         tc_lay.setSpacing(8)
         tree_hdr = QHBoxLayout()
         tree_hdr.addWidget(_make_label("路由列表", bold=True))
+        self._route_count_lbl = QLabel("0 条")
+        self._route_count_lbl.setProperty("class", "muted")
+        tree_hdr.addWidget(self._route_count_lbl)
         tree_hdr.addStretch()
         self._route_lbl = QLabel("当前路由: --")
         self._route_lbl.setProperty("class", "muted")
         tree_hdr.addWidget(self._route_lbl)
         tc_lay.addLayout(tree_hdr)
+        self._route_empty_hint = QLabel("连接小程序后点击「获取路由」，路由树会显示在这里。")
+        self._route_empty_hint.setProperty("class", "muted")
+        self._route_empty_hint.setAlignment(Qt.AlignCenter)
+        tc_lay.addWidget(self._route_empty_hint)
         self._tree = QTreeWidget()
+        self._tree.setMinimumHeight(300)
         self._tree.setHeaderHidden(True)
         self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1395,42 +1405,66 @@ class App(QMainWindow):
     # ── 云扫描 ──
 
     def _build_cloud(self):
+        """构建云扫描页面，集中展示捕获操作、云函数记录和手动调用结果。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
 
-        ctrl = QHBoxLayout()
+        toolbar_card = _make_card()
+        toolbar_lay = QVBoxLayout(toolbar_card)
+        toolbar_lay.setContentsMargins(16, 12, 16, 12)
+        toolbar_lay.setSpacing(10)
+
+        toolbar_top = QHBoxLayout()
+        toolbar_top.setSpacing(10)
+        toolbar_top.addWidget(_make_label("云扫描控制", bold=True))
+        self._cloud_env_lbl = QLabel("全局捕获（默认开启）")
+        self._cloud_env_lbl.setProperty("class", "muted")
+        toolbar_top.addWidget(self._cloud_env_lbl)
+        toolbar_top.addStretch()
         self._btn_cloud_toggle = _make_btn("停止捕获", self._cloud_do_toggle)
-        ctrl.addWidget(self._btn_cloud_toggle)
+        toolbar_top.addWidget(self._btn_cloud_toggle)
         self._btn_cloud_static = _make_btn("静态扫描", self._cloud_do_static_scan)
-        ctrl.addWidget(self._btn_cloud_static)
+        toolbar_top.addWidget(self._btn_cloud_static)
         self._btn_cloud_clear = _make_btn("清空记录", self._cloud_do_clear)
-        ctrl.addWidget(self._btn_cloud_clear)
-        self._cloud_scan_lbl = QLabel("")
-        ctrl.addWidget(self._cloud_scan_lbl)
-        ctrl.addStretch()
+        toolbar_top.addWidget(self._btn_cloud_clear)
         self._btn_cloud_export = _make_btn("导出报告", self._cloud_do_export)
-        ctrl.addWidget(self._btn_cloud_export)
-        lay.addLayout(ctrl)
+        toolbar_top.addWidget(self._btn_cloud_export)
+        toolbar_lay.addLayout(toolbar_top)
+
+        toolbar_bottom = QHBoxLayout()
+        toolbar_bottom.setSpacing(10)
+        self._cloud_status_lbl = QLabel("捕获: 0 条")
+        self._cloud_status_lbl.setProperty("class", "muted")
+        toolbar_bottom.addWidget(self._cloud_status_lbl)
+        self._cloud_scan_lbl = QLabel("")
+        self._cloud_scan_lbl.setProperty("class", "muted")
+        toolbar_bottom.addWidget(self._cloud_scan_lbl)
+        toolbar_bottom.addStretch()
+        toolbar_bottom.addWidget(QLabel("搜索"))
+        self._cloud_search_ent = _make_entry("AppID / 类型 / 名称 / 参数", width=240)
+        self._cloud_search_ent.textChanged.connect(self._cloud_filter)
+        toolbar_bottom.addWidget(self._cloud_search_ent)
+        toolbar_lay.addLayout(toolbar_bottom)
+        lay.addWidget(toolbar_card)
 
         tc = _make_card()
         tc_lay = QVBoxLayout(tc)
-        tc_lay.setContentsMargins(12, 8, 12, 8)
-        tc_lay.setSpacing(4)
+        tc_lay.setContentsMargins(16, 12, 16, 12)
+        tc_lay.setSpacing(8)
 
         title_row = QHBoxLayout()
         title_row.addWidget(_make_label("云函数捕获记录", bold=True))
-        self._cloud_env_lbl = QLabel("全局捕获（默认开启）")
-        title_row.addWidget(self._cloud_env_lbl)
         title_row.addStretch()
-        title_row.addWidget(QLabel("搜索"))
-        self._cloud_search_ent = _make_entry(width=180)
-        self._cloud_search_ent.textChanged.connect(self._cloud_filter)
-        title_row.addWidget(self._cloud_search_ent)
         tc_lay.addLayout(title_row)
+        self._cloud_empty_hint = QLabel("等待捕获云函数、数据库、存储或容器调用记录。")
+        self._cloud_empty_hint.setProperty("class", "muted")
+        self._cloud_empty_hint.setAlignment(Qt.AlignCenter)
+        tc_lay.addWidget(self._cloud_empty_hint)
 
         self._cloud_tree = QTreeWidget()
+        self._cloud_tree.setMinimumHeight(280)
         self._cloud_tree.setRootIsDecorated(False)
         self._cloud_tree.setIndentation(0)
         self._cloud_tree.setHeaderLabels(["AppID", "类型", "名称", "参数", "状态", "时间"])
@@ -1455,8 +1489,15 @@ class App(QMainWindow):
         tc_lay.addWidget(self._cloud_tree)
         lay.addWidget(tc, 1)
 
+        call_card = _make_card()
+        call_lay = QVBoxLayout(call_card)
+        call_lay.setContentsMargins(16, 12, 16, 12)
+        call_lay.setSpacing(8)
+        call_lay.addWidget(_make_label("手动调用", bold=True))
+
         call_row = QHBoxLayout()
-        call_row.addWidget(QLabel("手动调用"))
+        call_row.setSpacing(10)
+        call_row.addWidget(QLabel("函数名"))
         self._cloud_name_ent = _make_entry(width=140)
         call_row.addWidget(self._cloud_name_ent)
         call_row.addWidget(QLabel("参数"))
@@ -1465,19 +1506,16 @@ class App(QMainWindow):
         call_row.addWidget(self._cloud_data_ent, 1)
         self._btn_cloud_call = _make_btn("调用", self._cloud_do_call)
         call_row.addWidget(self._btn_cloud_call)
-        lay.addLayout(call_row)
+        call_lay.addLayout(call_row)
 
         self._cloud_result = QTextEdit()
         self._cloud_result.setReadOnly(True)
-        self._cloud_result.setFixedHeight(120)
+        self._cloud_result.setPlaceholderText("手动调用或右键查看返回结果后，会显示详细响应。")
+        self._cloud_result.setMinimumHeight(128)
+        self._cloud_result.setMaximumHeight(170)
         self._cloud_result.setFont(QFont(_FM, 9))
-        lay.addWidget(self._cloud_result)
-
-        bot = QHBoxLayout()
-        self._cloud_status_lbl = QLabel("捕获: 0 条")
-        bot.addWidget(self._cloud_status_lbl)
-        bot.addStretch()
-        lay.addLayout(bot)
+        call_lay.addWidget(self._cloud_result)
+        lay.addWidget(call_card)
 
         self._stack.addWidget(page)
         self._page_map["cloud"] = self._stack.count() - 1
@@ -1489,22 +1527,23 @@ class App(QMainWindow):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
         lay.setAlignment(Qt.AlignTop)
 
         status_card = _make_card()
         status_lay = QVBoxLayout(status_card)
         status_lay.setContentsMargins(16, 12, 16, 12)
-        status_lay.setSpacing(8)
-        status_lay.addWidget(_make_label("本地 MCP 服务", bold=True))
+        status_lay.setSpacing(10)
 
         mcp_row = QHBoxLayout()
+        mcp_row.setSpacing(8)
+        mcp_row.addWidget(_make_label("本地 MCP 服务", bold=True))
+        mcp_row.addStretch()
         self._mcp_status_dot = StatusDot()
         mcp_row.addWidget(self._mcp_status_dot)
         self._mcp_status_lbl = QLabel("MCP: 未启动")
         self._mcp_status_lbl.setProperty("class", "muted")
         mcp_row.addWidget(self._mcp_status_lbl)
-        mcp_row.addStretch()
         status_lay.addLayout(mcp_row)
 
         self._mcp_frida_lbl = QLabel("Frida: 未连接")
@@ -1516,9 +1555,19 @@ class App(QMainWindow):
                     self._mcp_devtools_lbl, self._mcp_app_lbl,
                     self._mcp_route_lbl):
             lbl.setProperty("class", "muted")
-            status_lay.addWidget(lbl)
+
+        status_grid = QGridLayout()
+        status_grid.setHorizontalSpacing(16)
+        status_grid.setVerticalSpacing(8)
+        status_grid.addWidget(self._mcp_frida_lbl, 0, 0)
+        status_grid.addWidget(self._mcp_miniapp_lbl, 0, 1)
+        status_grid.addWidget(self._mcp_devtools_lbl, 1, 0)
+        status_grid.addWidget(self._mcp_app_lbl, 1, 1)
+        status_grid.addWidget(self._mcp_route_lbl, 2, 0, 1, 2)
+        status_lay.addLayout(status_grid)
 
         ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(8)
         self._btn_mcp_start = _make_btn("启动 MCP", self._do_mcp_start)
         self._btn_mcp_stop = _make_btn("停止 MCP", self._do_mcp_stop)
         self._btn_mcp_restart = _make_btn("重启 MCP", self._do_mcp_restart)
@@ -1538,10 +1587,17 @@ class App(QMainWindow):
         conn_card = _make_card()
         conn_lay = QVBoxLayout(conn_card)
         conn_lay.setContentsMargins(16, 12, 16, 12)
-        conn_lay.setSpacing(8)
-        conn_lay.addWidget(_make_label("连接信息", bold=True))
+        conn_lay.setSpacing(10)
+
+        conn_hdr = QHBoxLayout()
+        conn_hdr.addWidget(_make_label("连接信息", bold=True))
+        conn_hdr.addStretch()
+        self._btn_mcp_copy_cfg = _make_btn("复制客户端配置", self._copy_mcp_config)
+        conn_hdr.addWidget(self._btn_mcp_copy_cfg)
+        conn_lay.addLayout(conn_hdr)
 
         addr_row = QHBoxLayout()
+        addr_row.setSpacing(10)
         addr_row.addWidget(QLabel("MCP 地址"))
         self._mcp_addr_ent = _make_entry(width=None)
         self._mcp_addr_ent.setText(self._mcp_endpoint)
@@ -1554,21 +1610,15 @@ class App(QMainWindow):
 
         self._mcp_config_box = QTextEdit()
         self._mcp_config_box.setReadOnly(True)
-        self._mcp_config_box.setMinimumHeight(110)
-        self._mcp_config_box.setMaximumHeight(140)
+        self._mcp_config_box.setMinimumHeight(120)
+        self._mcp_config_box.setMaximumHeight(150)
         self._mcp_config_box.setLineWrapMode(QTextEdit.NoWrap)
         self._mcp_config_box.setFont(QFont(_FM, 8))
         self._mcp_config_box.setPlainText(self._mcp_client_config())
         conn_lay.addWidget(self._mcp_config_box)
 
-        cfg_row = QHBoxLayout()
-        self._btn_mcp_copy_cfg = _make_btn("复制客户端配置", self._copy_mcp_config)
-        cfg_row.addWidget(self._btn_mcp_copy_cfg)
-        cfg_row.addStretch()
-        conn_lay.addLayout(cfg_row)
-
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
+        top_row.setSpacing(12)
         top_row.addWidget(status_card, 1)
         top_row.addWidget(conn_card, 2)
         lay.addLayout(top_row)
@@ -1576,43 +1626,52 @@ class App(QMainWindow):
         perm_card = _make_card()
         perm_lay = QVBoxLayout(perm_card)
         perm_lay.setContentsMargins(16, 12, 16, 12)
-        perm_lay.setSpacing(8)
-        perm_lay.addWidget(_make_label("权限开关", bold=True))
+        perm_lay.setSpacing(10)
+
+        perm_hdr = QHBoxLayout()
+        perm_hdr.addWidget(_make_label("权限开关", bold=True))
+        perm_hdr.addStretch()
+        perm_lay.addLayout(perm_hdr)
+
         perm_tip = QLabel("读取类能力默认允许；自动访问、探针注入、云函数调用等高影响能力需单独开启。")
         perm_tip.setWordWrap(True)
         perm_tip.setProperty("class", "muted")
         perm_lay.addWidget(perm_tip)
 
-        perm_grid = QVBoxLayout()
-        perm_grid.setSpacing(6)
-        for i in range(0, len(_MCP_PERMISSIONS), 2):
-            row = QHBoxLayout()
-            row.setSpacing(18)
-            for key, label, _ in _MCP_PERMISSIONS[i:i + 2]:
-                cell = QHBoxLayout()
-                tog = ToggleSwitch(bool(self._mcp_permissions.get(key, False)))
-                tog.toggled.connect(lambda checked, k=key: self._set_mcp_permission(k, checked))
-                self._mcp_permission_toggles[key] = tog
-                cell.addWidget(tog)
-                cell.addWidget(QLabel(label))
-                cell.addStretch()
-                row.addLayout(cell, 1)
-            perm_grid.addLayout(row)
+        perm_grid = QGridLayout()
+        perm_grid.setHorizontalSpacing(24)
+        perm_grid.setVerticalSpacing(10)
+        for idx, (key, label, _) in enumerate(_MCP_PERMISSIONS):
+            cell = QHBoxLayout()
+            cell.setSpacing(8)
+            tog = ToggleSwitch(bool(self._mcp_permissions.get(key, False)))
+            tog.toggled.connect(lambda checked, k=key: self._set_mcp_permission(k, checked))
+            self._mcp_permission_toggles[key] = tog
+            text = QLabel(label)
+            text.setMinimumWidth(86)
+            cell.addWidget(tog)
+            cell.addWidget(text)
+            cell.addStretch()
+            perm_grid.addLayout(cell, idx // 3, idx % 3)
         perm_lay.addLayout(perm_grid)
         lay.addWidget(perm_card)
+
+        log_card = _make_card()
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(16, 12, 16, 12)
+        log_lay.setSpacing(8)
 
         log_hdr = QHBoxLayout()
         log_hdr.addWidget(_make_label("MCP 日志", bold=True))
         log_hdr.addStretch()
         self._btn_mcp_clear_log = _make_btn("清空", self._clear_mcp_log)
         log_hdr.addWidget(self._btn_mcp_clear_log)
-        lay.addLayout(log_hdr)
+        log_lay.addLayout(log_hdr)
 
-        log_card = _make_card()
-        log_lay = QVBoxLayout(log_card)
-        log_lay.setContentsMargins(0, 0, 0, 0)
         self._mcp_logbox = QTextEdit()
         self._mcp_logbox.setReadOnly(True)
+        self._mcp_logbox.setPlaceholderText("MCP 服务日志会显示在这里。")
+        self._mcp_logbox.setMinimumHeight(190)
         self._mcp_logbox.setFont(QFont(_FM, 9))
         log_lay.addWidget(self._mcp_logbox)
         lay.addWidget(log_card, 1)
@@ -1626,22 +1685,24 @@ class App(QMainWindow):
     # ── 敏感信息提取 ──
 
     def _build_extract(self):
+        """构建敏感信息提取页面，提供目录选择、批处理操作、小程序列表和处理日志。"""
         # 外层使用 QStackedWidget 实现子页面切换
         self._ext_stack = QStackedWidget()
 
         # =================== 主页面 ===================
         main_page = QWidget()
         main_lay = QVBoxLayout(main_page)
-        main_lay.setContentsMargins(24, 8, 24, 8)
-        main_lay.setSpacing(8)
+        main_lay.setContentsMargins(24, 12, 24, 16)
+        main_lay.setSpacing(12)
 
         # --- Row 1: Applet目录 ---
         c1 = _make_card()
         c1_lay = QVBoxLayout(c1)
-        c1_lay.setContentsMargins(16, 10, 16, 10)
-        c1_lay.setSpacing(6)
+        c1_lay.setContentsMargins(16, 12, 16, 12)
+        c1_lay.setSpacing(10)
 
         path_row = QHBoxLayout()
+        path_row.setSpacing(10)
         path_row.addWidget(_make_label("Applet目录", bold=True))
         self._ext_path_ent = _make_entry("wxapkg 包目录路径...")
         # 自动检测默认路径
@@ -1664,7 +1725,14 @@ class App(QMainWindow):
         main_lay.addWidget(c1)
 
         # --- Row 2: 功能区 ---
+        action_card = _make_card()
+        action_lay = QVBoxLayout(action_card)
+        action_lay.setContentsMargins(16, 12, 16, 12)
+        action_lay.setSpacing(10)
+
         func_row = QHBoxLayout()
+        func_row.setSpacing(10)
+        func_row.addWidget(_make_label("处理操作", bold=True))
         self._btn_ext_regex = _make_btn("正则配置", self._ext_goto_regex)
         func_row.addWidget(self._btn_ext_regex)
         self._btn_ext_clear_decompiled = _make_btn("清空解包文件", self._ext_clear_decompiled)
@@ -1681,7 +1749,7 @@ class App(QMainWindow):
         self._tog_auto_scan = ToggleSwitch(self._cfg.get("auto_scan", False))
         self._tog_auto_scan.toggled.connect(lambda v: self._auto_save())
         func_row.addWidget(self._tog_auto_scan)
-        main_lay.addLayout(func_row)
+        action_lay.addLayout(func_row)
 
         # --- 进度 + 状态 ---
         self._ext_prog = QProgressBar()
@@ -1689,20 +1757,22 @@ class App(QMainWindow):
         self._ext_prog.setValue(0)
         self._ext_prog.setTextVisible(False)
         self._ext_prog.setFixedHeight(6)
-        main_lay.addWidget(self._ext_prog)
+        action_lay.addWidget(self._ext_prog)
         self._ext_status_lbl = QLabel("就绪")
         self._ext_status_lbl.setProperty("class", "muted")
-        main_lay.addWidget(self._ext_status_lbl)
+        action_lay.addWidget(self._ext_status_lbl)
+        main_lay.addWidget(action_card)
 
         # --- Row 3: 小程序列表 ---
         list_card = _make_card()
         list_lay = QVBoxLayout(list_card)
-        list_lay.setContentsMargins(0, 6, 0, 6)
-        list_lay.setSpacing(0)
+        list_lay.setContentsMargins(16, 12, 16, 12)
+        list_lay.setSpacing(8)
 
         # 表头
+        list_lay.addWidget(_make_label("小程序列表", bold=True))
         hdr = QHBoxLayout()
-        hdr.setContentsMargins(16, 4, 16, 4)
+        hdr.setContentsMargins(0, 0, 0, 0)
         hdr_appid = _make_label("AppID", bold=True)
         hdr_appid.setFixedWidth(180)
         hdr.addWidget(hdr_appid)
@@ -1724,7 +1794,7 @@ class App(QMainWindow):
         scroll.setWidgetResizable(True)
         self._ext_list_inner = QWidget()
         self._ext_list_layout = QVBoxLayout(self._ext_list_inner)
-        self._ext_list_layout.setContentsMargins(8, 4, 8, 4)
+        self._ext_list_layout.setContentsMargins(0, 4, 0, 0)
         self._ext_list_layout.setSpacing(4)
         self._ext_list_layout.addStretch()
         scroll.setWidget(self._ext_list_inner)
@@ -1733,36 +1803,47 @@ class App(QMainWindow):
         main_lay.addWidget(list_card, 1)
 
         # 日志区
+        log_card = _make_card()
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(16, 12, 16, 12)
+        log_lay.setSpacing(8)
+        log_lay.addWidget(_make_label("处理日志", bold=True))
         self._ext_logbox = QTextEdit()
         self._ext_logbox.setReadOnly(True)
+        self._ext_logbox.setPlaceholderText("反编译、扫描和自动处理日志会显示在这里。")
         self._ext_logbox.setFont(QFont(_FM, 9))
-        self._ext_logbox.setMaximumHeight(120)
-        main_lay.addWidget(self._ext_logbox)
+        self._ext_logbox.setMinimumHeight(120)
+        self._ext_logbox.setMaximumHeight(170)
+        log_lay.addWidget(self._ext_logbox)
+        main_lay.addWidget(log_card)
 
         self._ext_stack.addWidget(main_page)  # index 0
 
         # =================== 正则配置子页面 ===================
         regex_page = QWidget()
         regex_lay = QVBoxLayout(regex_page)
-        regex_lay.setContentsMargins(24, 8, 24, 8)
-        regex_lay.setSpacing(8)
+        regex_lay.setContentsMargins(24, 12, 24, 16)
+        regex_lay.setSpacing(12)
 
         # 返回按钮行
-        regex_top = QHBoxLayout()
+        regex_top_card = _make_card()
+        regex_top_lay = QHBoxLayout(regex_top_card)
+        regex_top_lay.setContentsMargins(16, 12, 16, 12)
+        regex_top_lay.setSpacing(10)
         btn_back_regex = _make_btn("← 返回", lambda: self._ext_stack.setCurrentIndex(0))
-        regex_top.addWidget(btn_back_regex)
-        regex_top.addWidget(_make_label("正则配置", bold=True))
-        regex_top.addStretch()
-        regex_lay.addLayout(regex_top)
+        regex_top_lay.addWidget(btn_back_regex)
+        regex_top_lay.addWidget(_make_label("正则配置", bold=True))
+        regex_top_lay.addWidget(_make_label("提取时会与内置规则合并使用", muted=True))
+        regex_top_lay.addStretch()
+        regex_lay.addWidget(regex_top_card)
 
         # 自定义正则卡片
         custom_card = _make_card()
         cc_lay = QVBoxLayout(custom_card)
-        cc_lay.setContentsMargins(16, 10, 16, 10)
-        cc_lay.setSpacing(6)
+        cc_lay.setContentsMargins(16, 12, 16, 12)
+        cc_lay.setSpacing(8)
         cc_hdr = QHBoxLayout()
         cc_hdr.addWidget(_make_label("自定义正则", bold=True))
-        cc_hdr.addWidget(_make_label("(提取时会与内置规则合并使用)", muted=True))
         cc_hdr.addStretch()
         btn_add = _make_btn("新建", self._ext_add_pattern)
         cc_hdr.addWidget(btn_add)
@@ -1787,6 +1868,7 @@ class App(QMainWindow):
         self._ext_pat_scroll = QScrollArea()
         self._ext_pat_scroll.setWidgetResizable(True)
         self._ext_pat_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._ext_pat_scroll.setMinimumHeight(190)
         self._ext_pat_inner = QWidget()
         self._ext_pat_layout = QVBoxLayout(self._ext_pat_inner)
         self._ext_pat_layout.setContentsMargins(0, 0, 0, 0)
@@ -1799,8 +1881,8 @@ class App(QMainWindow):
         # 内置正则卡片（紧凑）
         builtin_card = _make_card()
         bc_lay = QVBoxLayout(builtin_card)
-        bc_lay.setContentsMargins(16, 10, 16, 10)
-        bc_lay.setSpacing(6)
+        bc_lay.setContentsMargins(16, 12, 16, 12)
+        bc_lay.setSpacing(8)
         bc_lay.addWidget(_make_label("内置正则规则 (只读)", bold=True))
 
         self._ext_builtin_tree = QTreeWidget()
@@ -1810,7 +1892,8 @@ class App(QMainWindow):
         bh.setSectionResizeMode(0, QHeaderView.Interactive)
         self._ext_builtin_tree.setColumnWidth(0, 200)
         self._ext_builtin_tree.setRootIsDecorated(False)
-        self._ext_builtin_tree.setMaximumHeight(200)
+        self._ext_builtin_tree.setMinimumHeight(180)
+        self._ext_builtin_tree.setMaximumHeight(220)
         bc_lay.addWidget(self._ext_builtin_tree)
         regex_lay.addWidget(builtin_card)  # 无stretch，内置区域紧凑
 
@@ -1819,10 +1902,13 @@ class App(QMainWindow):
         # =================== 查看敏感信息子页面 ===================
         view_page = QWidget()
         view_lay = QVBoxLayout(view_page)
-        view_lay.setContentsMargins(16, 8, 16, 8)
-        view_lay.setSpacing(6)
+        view_lay.setContentsMargins(24, 12, 24, 16)
+        view_lay.setSpacing(12)
 
-        view_top = QHBoxLayout()
+        view_top_card = _make_card()
+        view_top = QHBoxLayout(view_top_card)
+        view_top.setContentsMargins(16, 12, 16, 12)
+        view_top.setSpacing(10)
         btn_back_view = _make_btn("← 返回", lambda: self._ext_stack.setCurrentIndex(0))
         view_top.addWidget(btn_back_view)
         self._ext_view_title = _make_label("查看敏感信息", bold=True)
@@ -1830,9 +1916,14 @@ class App(QMainWindow):
         view_top.addStretch()
         self._btn_ext_open_html = _make_btn("网页访问", self._ext_open_html)
         view_top.addWidget(self._btn_ext_open_html)
-        view_lay.addLayout(view_top)
+        view_lay.addWidget(view_top_card)
 
         # 结果展示区 (滚动)
+        view_result_card = _make_card()
+        view_result_lay = QVBoxLayout(view_result_card)
+        view_result_lay.setContentsMargins(16, 12, 16, 12)
+        view_result_lay.setSpacing(8)
+        view_result_lay.addWidget(_make_label("扫描结果", bold=True))
         self._ext_view_scroll = QScrollArea()
         self._ext_view_scroll.setWidgetResizable(True)
         self._ext_view_scroll.setStyleSheet("QScrollArea { border: none; }")
@@ -1841,7 +1932,8 @@ class App(QMainWindow):
         self._ext_view_top_layout.setContentsMargins(0, 0, 0, 0)
         self._ext_view_top_layout.setSpacing(0)
         self._ext_view_scroll.setWidget(self._ext_view_inner)
-        view_lay.addWidget(self._ext_view_scroll, 1)
+        view_result_lay.addWidget(self._ext_view_scroll, 1)
+        view_lay.addWidget(view_result_card, 1)
 
         self._ext_stack.addWidget(view_page)  # index 2
 
@@ -2855,18 +2947,22 @@ class App(QMainWindow):
     # ── 调试开关 (vConsole) ──
 
     def _build_vconsole(self):
+        """构建调试开关页面，用于检测并切换小程序 vConsole 调试状态。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
         lay.setAlignment(Qt.AlignTop)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
 
         # 风险警告卡片
         warn_card = _make_card()
         warn_lay = QVBoxLayout(warn_card)
         warn_lay.setContentsMargins(16, 12, 16, 12)
-        warn_lay.setSpacing(6)
-        warn_title = QLabel("⚠  风险提示")
+        warn_lay.setSpacing(8)
+        warn_title = QLabel("风险提示")
         warn_title.setFont(QFont(_FN, 11, QFont.Bold))
         warn_title.setStyleSheet("color: #e6a23c;")
         warn_lay.addWidget(warn_title)
@@ -2876,19 +2972,50 @@ class App(QMainWindow):
         warn_text.setWordWrap(True)
         warn_text.setStyleSheet("color: #e6a23c; font-size: 12px;")
         warn_lay.addWidget(warn_text)
-        lay.addWidget(warn_card)
+        top_row.addWidget(warn_card, 1)
+
+        # 操作卡片
+        op_card = _make_card()
+        op_lay = QVBoxLayout(op_card)
+        op_lay.setContentsMargins(16, 12, 16, 12)
+        op_lay.setSpacing(10)
+
+        op_hdr = QHBoxLayout()
+        op_hdr.addWidget(_make_label("调试状态", bold=True))
+        op_hdr.addStretch()
+        self._vc_status_lbl = QLabel("状态: 未连接小程序")
+        self._vc_status_lbl.setProperty("class", "muted")
+        op_hdr.addWidget(self._vc_status_lbl)
+        op_lay.addLayout(op_hdr)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self._btn_vc_enable = _make_btn("开启调试", self._do_vc_enable)
+        self._btn_vc_enable.setFont(QFont(_FN, 10, QFont.Bold))
+        self._btn_vc_enable.setEnabled(False)
+        btn_row.addWidget(self._btn_vc_enable)
+        self._btn_vc_disable = _make_btn("关闭调试", self._do_vc_disable)
+        self._btn_vc_disable.setFont(QFont(_FN, 10, QFont.Bold))
+        self._btn_vc_disable.setEnabled(False)
+        btn_row.addWidget(self._btn_vc_disable)
+        btn_row.addStretch()
+        op_lay.addLayout(btn_row)
+        op_tip = QLabel("连接小程序后会自动检测当前调试状态，切换结果通常需要重启小程序后完全生效。")
+        op_tip.setWordWrap(True)
+        op_tip.setProperty("class", "muted")
+        op_lay.addWidget(op_tip)
+        top_row.addWidget(op_card, 1)
+        lay.addLayout(top_row)
 
         # 功能说明卡片
         info_card = _make_card()
         info_lay = QVBoxLayout(info_card)
         info_lay.setContentsMargins(16, 12, 16, 12)
-        info_lay.setSpacing(6)
+        info_lay.setSpacing(8)
         info_lay.addWidget(_make_label("功能说明", bold=True))
         desc = QLabel(
-            "通过官方 API wx.setEnableDebug 开启小程序内置的 vConsole 调试面板。\n\n"
-            "开启后可以：\n"
-            "  •  在小程序内直接执行 JS 代码\n"
-            "  •  调用 wx.cloud.callFunction 调试云函数\n\n"
+            "通过官方 API wx.setEnableDebug 开启小程序内置的 vConsole 调试面板。"
+            "开启后可在小程序内执行 JS，也可直接调试 wx.cloud.callFunction。"
             "关闭后重启小程序即可恢复正常。")
         desc.setWordWrap(True)
         desc.setProperty("class", "muted")
@@ -2900,30 +3027,6 @@ class App(QMainWindow):
         ref_lbl.setStyleSheet("font-size: 11px;")
         info_lay.addWidget(ref_lbl)
         lay.addWidget(info_card)
-
-        # 操作卡片
-        op_card = _make_card()
-        op_lay = QVBoxLayout(op_card)
-        op_lay.setContentsMargins(16, 12, 16, 12)
-        op_lay.setSpacing(8)
-        op_lay.addWidget(_make_label("操作", bold=True))
-
-        btn_row = QHBoxLayout()
-        self._btn_vc_enable = _make_btn("开启调试", self._do_vc_enable)
-        self._btn_vc_enable.setFont(QFont(_FN, 10, QFont.Bold))
-        self._btn_vc_enable.setEnabled(False)
-        btn_row.addWidget(self._btn_vc_enable)
-        self._btn_vc_disable = _make_btn("关闭调试", self._do_vc_disable)
-        self._btn_vc_disable.setFont(QFont(_FN, 10, QFont.Bold))
-        self._btn_vc_disable.setEnabled(False)
-        btn_row.addWidget(self._btn_vc_disable)
-        btn_row.addStretch()
-        op_lay.addLayout(btn_row)
-
-        self._vc_status_lbl = QLabel("状态: 未连接小程序")
-        self._vc_status_lbl.setProperty("class", "muted")
-        op_lay.addWidget(self._vc_status_lbl)
-        lay.addWidget(op_card)
 
         lay.addStretch()
 
@@ -3022,21 +3125,28 @@ class App(QMainWindow):
     # ── 日志 ──
 
     def _build_logs(self):
+        """构建运行日志页面，提供调试日志开关和滚动日志输出。"""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(24, 12, 24, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
 
         # 调试选项卡片
         dc = _make_card()
         dc_lay = QVBoxLayout(dc)
-        dc_lay.setContentsMargins(16, 10, 16, 10)
-        dc_lay.setSpacing(6)
-        dc_lay.addWidget(_make_label("调试选项", bold=True))
-        warn_lbl = QLabel("⚠ 开启后可能导致小程序卡死，请谨慎使用")
+        dc_lay.setContentsMargins(16, 12, 16, 12)
+        dc_lay.setSpacing(10)
+
+        dc_hdr = QHBoxLayout()
+        dc_hdr.addWidget(_make_label("调试选项", bold=True))
+        dc_hdr.addStretch()
+        warn_lbl = QLabel("开启后可能导致小程序卡死，请谨慎使用")
         warn_lbl.setStyleSheet("color: #fbbf24; font-size: 9px;")
-        dc_lay.addWidget(warn_lbl)
+        dc_hdr.addWidget(warn_lbl)
+        dc_lay.addLayout(dc_hdr)
+
         chkr = QHBoxLayout()
+        chkr.setSpacing(8)
         self._tog_dm = ToggleSwitch(self._cfg.get("debug_main", False))
         self._tog_dm.toggled.connect(lambda v: self._auto_save())
         chkr.addWidget(self._tog_dm)
@@ -3050,18 +3160,22 @@ class App(QMainWindow):
         dc_lay.addLayout(chkr)
         lay.addWidget(dc)
 
+        lc = _make_card()
+        lc_lay = QVBoxLayout(lc)
+        lc_lay.setContentsMargins(16, 12, 16, 12)
+        lc_lay.setSpacing(8)
+
         hdr = QHBoxLayout()
         hdr.addWidget(_make_label("日志输出", bold=True))
         hdr.addStretch()
         self._btn_clear = _make_btn("清空", self._do_clear)
         hdr.addWidget(self._btn_clear)
-        lay.addLayout(hdr)
+        lc_lay.addLayout(hdr)
 
-        lc = _make_card()
-        lc_lay = QVBoxLayout(lc)
-        lc_lay.setContentsMargins(0, 0, 0, 0)
         self._logbox = QTextEdit()
         self._logbox.setReadOnly(True)
+        self._logbox.setPlaceholderText("启动调试、Hook、路由、云扫描和 MCP 日志会显示在这里。")
+        self._logbox.setMinimumHeight(420)
         self._logbox.setFont(QFont(_FM, 9))
         lc_lay.addWidget(self._logbox)
         lay.addWidget(lc, 1)
@@ -3073,13 +3187,19 @@ class App(QMainWindow):
         """构建常见问题页面，承载原控制台中的问题解决方案。"""
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setContentsMargins(24, 12, 24, 16)
         lay.setSpacing(12)
 
+        intro_card = _make_card()
+        intro_lay = QVBoxLayout(intro_card)
+        intro_lay.setContentsMargins(16, 12, 16, 12)
+        intro_lay.setSpacing(8)
+        intro_lay.addWidget(_make_label("常见问题", bold=True))
         intro = QLabel("以下内容用于排查启动调试、Frida 连接和 DevTools 空白等常见问题。")
         intro.setProperty("class", "muted")
         intro.setWordWrap(True)
-        lay.addWidget(intro)
+        intro_lay.addWidget(intro)
+        lay.addWidget(intro_card)
 
         faq_items = [
             ("Frida 连接失败", "请确认当前版本是否在 WMPF 版本区间内，如无法解决建议安装推荐版本。"),
@@ -3090,19 +3210,37 @@ class App(QMainWindow):
             ),
         ]
 
-        for title, solution in faq_items:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setContentsMargins(0, 0, 0, 0)
+        inner_lay.setSpacing(10)
+
+        for idx, (title, solution) in enumerate(faq_items, start=1):
             card = _make_card()
             card_lay = QVBoxLayout(card)
-            card_lay.setContentsMargins(18, 14, 18, 14)
+            card_lay.setContentsMargins(16, 12, 16, 12)
             card_lay.setSpacing(8)
-            card_lay.addWidget(_make_label(title, bold=True))
+            head = QHBoxLayout()
+            num = QLabel(f"{idx:02d}")
+            num.setFont(QFont(_FM, 10, QFont.Bold))
+            num.setProperty("class", "muted")
+            head.addWidget(num)
+            head.addWidget(_make_label(title, bold=True))
+            head.addStretch()
+            card_lay.addLayout(head)
             content = QLabel(solution)
             content.setProperty("class", "muted")
             content.setWordWrap(True)
+            content.setTextInteractionFlags(Qt.TextSelectableByMouse)
             card_lay.addWidget(content)
-            lay.addWidget(card)
+            inner_lay.addWidget(card)
 
-        lay.addStretch()
+        inner_lay.addStretch()
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
         self._stack.addWidget(page)
         self._page_map["faq"] = self._stack.count() - 1
 
@@ -4546,11 +4684,30 @@ class App(QMainWindow):
         self._guard_switch.blockSignals(False)
         self._guard_label.setText("防跳转: 开启" if self._redirect_guard_on else "防跳转: 关闭")
 
+    def _update_route_empty_state(self, message=None, count_text=None):
+        """根据当前路由树数量刷新空状态提示和路由计数。"""
+        if not hasattr(self, "_tree"):
+            return
+        count = self._tree.topLevelItemCount()
+        total = len(self._flat_routes or self._all_routes)
+        if hasattr(self, "_route_count_lbl"):
+            self._route_count_lbl.setText(count_text or (f"{total} 条" if total else "0 条"))
+        if not hasattr(self, "_route_empty_hint"):
+            return
+        if count:
+            self._route_empty_hint.hide()
+            return
+        if message:
+            self._route_empty_hint.setText(message)
+        self._route_empty_hint.show()
+
     def _do_filter(self):
         q = self._srch_ent.text().strip().lower()
         if not q:
             if self._navigator:
                 self._fill_tree(self._all_routes, self._navigator.tab_bar_pages)
+            elif hasattr(self, "_route_empty_hint"):
+                self._update_route_empty_state("连接小程序后点击「获取路由」，路由树会显示在这里。")
             return
         flt = [p for p in self._all_routes if q in p.lower()]
         self._tree.setUpdatesEnabled(False)
@@ -4560,6 +4717,7 @@ class App(QMainWindow):
             item.setData(0, Qt.UserRole, p)
             self._tree.addTopLevelItem(item)
         self._tree.setUpdatesEnabled(True)
+        self._update_route_empty_state("没有匹配的路由。", f"{len(flt)} / {len(self._all_routes)} 条")
 
     def _fill_tree(self, pages, tab_bar):
         self._tree.setUpdatesEnabled(False)
@@ -4598,6 +4756,7 @@ class App(QMainWindow):
 
         self._flat_routes = flat
         self._tree.setUpdatesEnabled(True)
+        self._update_route_empty_state("未获取到路由，请确认小程序已连接。")
 
         # 默认选中并定位到第一个页面
         if flat and self._nav_route_idx < 0:
@@ -4661,12 +4820,22 @@ class App(QMainWindow):
         self._cloud_result.setHtml(f'<span style="color:{c["text1"]}">「{name}」返回结果:\n{detail}</span>')
 
     def _cloud_update_status(self):
+        """刷新云扫描记录计数和空状态提示。"""
         count = self._cloud_tree.topLevelItemCount()
         total = len(self._cloud_all_items)
         if count < total:
             self._cloud_status_lbl.setText(f"显示: {count} / {total} 条")
         else:
             self._cloud_status_lbl.setText(f"捕获: {count} 条")
+        if hasattr(self, "_cloud_empty_hint"):
+            if count:
+                self._cloud_empty_hint.hide()
+            else:
+                if total:
+                    self._cloud_empty_hint.setText("没有匹配的云函数记录。")
+                else:
+                    self._cloud_empty_hint.setText("等待捕获云函数、数据库、存储或容器调用记录。")
+                self._cloud_empty_hint.show()
 
     def _cloud_filter(self):
         kw = self._cloud_search_ent.text().strip().lower()
