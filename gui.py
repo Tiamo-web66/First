@@ -4025,6 +4025,8 @@ class App(QMainWindow):
         self._faq_search_ent = _make_entry("输入问题或解决方案关键字...")
         self._faq_search_ent.textChanged.connect(self._filter_faq_items)
         faq_tools.addWidget(self._faq_search_ent, 1)
+        self._btn_open_radium_wmpf = _make_btn("打开 RadiumWMPF", self._open_radium_wmpf_dir)
+        faq_tools.addWidget(self._btn_open_radium_wmpf)
         self._btn_faq_copy_all = _make_btn("复制全部", self._copy_all_faq)
         faq_tools.addWidget(self._btn_faq_copy_all)
         self._btn_faq_clear_search = _make_btn("清除搜索", self._clear_faq_search)
@@ -4115,6 +4117,26 @@ class App(QMainWindow):
         """复制单条常见问题及其解决方案。"""
         QApplication.clipboard().setText(f"{title}\n{solution}")
         self._log_add("info", f"[FAQ] 已复制: {title}")
+
+    def _open_radium_wmpf_dir(self):
+        """打开当前用户的 RadiumWMPF 插件目录，便于查看数字版本文件夹。"""
+        path = os.path.join(
+            os.path.expanduser("~"),
+            "AppData",
+            "Roaming",
+            "Tencent",
+            "xwechat",
+            "XPlugin",
+            "Plugins",
+            "RadiumWMPF",
+        )
+        if not os.path.isdir(path):
+            self._log_add("warn", f"[FAQ] RadiumWMPF 目录不存在: {path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            self._log_add("warn", f"[FAQ] 打开 RadiumWMPF 目录失败: {path}")
+            return
+        self._log_add("info", f"[FAQ] 已打开 RadiumWMPF 目录: {path}")
 
     def _copy_all_faq(self):
         """复制当前匹配的常见问题列表。"""
