@@ -109,6 +109,10 @@ _MCP_TOOL_SUMMARIES = {
     "stop_capture": "停止捕获网络请求",
     "get_recent_requests": "读取最近捕获请求",
     "clear_requests": "清空已捕获请求",
+    "start_network_listen": "开启 CDP 网络监听",
+    "stop_network_listen": "停止 CDP 网络监听",
+    "get_network_events": "读取 CDP 网络请求",
+    "get_network_response_body": "读取 CDP 响应体",
     "list_runtime_scripts": "列出运行时脚本",
     "get_runtime_script_source": "读取运行时脚本源码",
     "set_auto_breakpoint": "设置自动断点",
@@ -1219,6 +1223,14 @@ class App(QMainWindow):
         self._mcp_pause_cv = threading.Condition()
         self._mcp_breakpoint_engine = None
         self._mcp_breakpoint_listener_attached = False
+        self._mcp_network_engine = None
+        self._mcp_network_listener_attached = False
+        self._mcp_network_listening = False
+        self._mcp_network_events = {}
+        self._mcp_network_order = []
+        self._mcp_network_seq = 0
+        self._mcp_network_max_events = 500
+        self._mcp_network_lock = threading.Lock()
         self._log_q = queue.Queue()
         self._log_entries = []
         self._sts_q = queue.Queue()
@@ -4810,6 +4822,8 @@ class App(QMainWindow):
             "recent_debug_categories": debug_context.get("recent_debug_categories", []),
             "last_observed_jscontext_id": debug_context.get("last_observed_jscontext_id", ""),
             "connected_jscontext_id": debug_context.get("connected_jscontext_id", ""),
+            "network_listening": bool(self._mcp_network_listening),
+            "network_event_count": len(self._mcp_network_order),
             "permissions": dict(self._mcp_permissions),
         }
 
@@ -4876,6 +4890,35 @@ class App(QMainWindow):
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
             return self._mcp_tool_get_capture_state()
+        if name == "start_network_listen":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            clear = bool(arguments.get("clear", True))
+            max_events = int(self._mcp_number_arg(arguments, "max_events", 500, 1, 1000))
+            return self._mcp_tool_start_network_listen(clear, max_events)
+        if name == "stop_network_listen":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_stop_network_listen()
+        if name == "get_network_events":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            limit = int(self._mcp_number_arg(arguments, "limit", 50, 1, 200))
+            since_seq = arguments.get("since_seq")
+            try:
+                since_seq = int(since_seq) if since_seq not in (None, "") else None
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid since_seq"}
+            return self._mcp_tool_get_network_events(limit, since_seq)
+        if name == "get_network_response_body":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            request_id = str(arguments.get("request_id", "") or "").strip()
+            if not request_id:
+                return {"ok": False, "error": "missing request_id"}
+            timeout = self._mcp_number_arg(arguments, "timeout", 5.0, 0.5, 15.0)
+            max_chars = int(self._mcp_number_arg(arguments, "max_chars", 20000, 1, 200000))
+            return self._mcp_tool_get_network_response_body(request_id, timeout, max_chars)
         if name == "get_recent_cloud_calls":
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
@@ -5201,6 +5244,226 @@ class App(QMainWindow):
         try:
             state = self._mcp_run_coro(self._navigator.get_capture_state(), 6.0)
             return state if isinstance(state, dict) else {"ok": False, "error": "capture state unavailable"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_clear_network_buffer(self):
+        """Clear buffered CDP Network request records for MCP polling."""
+        with self._mcp_network_lock:
+            self._mcp_network_events = {}
+            self._mcp_network_order = []
+            self._mcp_network_seq = 0
+
+    def _mcp_detach_network_listeners(self):
+        """Detach CDP Network listeners from the active debug engine."""
+        engine = self._mcp_network_engine
+        if engine and self._mcp_network_listener_attached:
+            for method, callback in (
+                    ("Network.requestWillBeSent", self._mcp_on_network_request_will_be_sent),
+                    ("Network.responseReceived", self._mcp_on_network_response_received),
+                    ("Network.loadingFinished", self._mcp_on_network_loading_finished),
+                    ("Network.loadingFailed", self._mcp_on_network_loading_failed),
+            ):
+                try:
+                    engine.off_cdp_event(method, callback)
+                except Exception:
+                    pass
+        self._mcp_network_engine = None
+        self._mcp_network_listener_attached = False
+        self._mcp_network_listening = False
+
+    def _mcp_attach_network_listeners(self):
+        """Attach CDP Network listeners to the current debug engine once."""
+        if not self._engine:
+            raise RuntimeError("debug engine not started")
+        if self._mcp_network_engine is self._engine and self._mcp_network_listener_attached:
+            return
+        self._mcp_detach_network_listeners()
+        self._engine.on_cdp_event("Network.requestWillBeSent", self._mcp_on_network_request_will_be_sent)
+        self._engine.on_cdp_event("Network.responseReceived", self._mcp_on_network_response_received)
+        self._engine.on_cdp_event("Network.loadingFinished", self._mcp_on_network_loading_finished)
+        self._engine.on_cdp_event("Network.loadingFailed", self._mcp_on_network_loading_failed)
+        self._mcp_network_engine = self._engine
+        self._mcp_network_listener_attached = True
+
+    def _mcp_update_network_record(self, request_id, updates):
+        """Merge one CDP Network event into the MCP request buffer."""
+        req_id = str(request_id or "").strip()
+        if not req_id:
+            return
+        with self._mcp_network_lock:
+            record = self._mcp_network_events.get(req_id, {}).copy()
+            if not record:
+                record = {"request_id": req_id}
+                self._mcp_network_order.append(req_id)
+            record.update(updates)
+            self._mcp_network_seq += 1
+            record["seq"] = self._mcp_network_seq
+            record["updated_at"] = time.strftime("%H:%M:%S")
+            self._mcp_network_events[req_id] = record
+            while len(self._mcp_network_order) > self._mcp_network_max_events:
+                old_id = self._mcp_network_order.pop(0)
+                self._mcp_network_events.pop(old_id, None)
+
+    def _mcp_on_network_request_will_be_sent(self, data):
+        """Record a CDP Network.requestWillBeSent event for MCP clients."""
+        params = data.get("params", {}) if isinstance(data, dict) else {}
+        request = params.get("request", {}) if isinstance(params, dict) else {}
+        if not isinstance(request, dict):
+            request = {}
+        post_data = request.get("postData")
+        self._mcp_update_network_record(params.get("requestId"), {
+            "url": request.get("url", "") or "",
+            "method": request.get("method", "") or "",
+            "request_headers": request.get("headers", {}) or {},
+            "post_data": self._mcp_preview_value(post_data, 20000),
+            "resource_type": params.get("type", "") or "",
+            "document_url": params.get("documentURL", "") or "",
+            "timestamp": params.get("timestamp"),
+            "wall_time": params.get("wallTime"),
+            "status": "pending",
+            "failed": False,
+            "finished": False,
+        })
+
+    def _mcp_on_network_response_received(self, data):
+        """Merge CDP Network.responseReceived metadata into a buffered request."""
+        params = data.get("params", {}) if isinstance(data, dict) else {}
+        response = params.get("response", {}) if isinstance(params, dict) else {}
+        if not isinstance(response, dict):
+            response = {}
+        self._mcp_update_network_record(params.get("requestId"), {
+            "response_url": response.get("url", "") or "",
+            "status_code": response.get("status"),
+            "status_text": response.get("statusText", "") or "",
+            "mime_type": response.get("mimeType", "") or "",
+            "response_headers": response.get("headers", {}) or {},
+            "remote_ip_address": response.get("remoteIPAddress", "") or "",
+            "remote_port": response.get("remotePort"),
+            "from_disk_cache": bool(response.get("fromDiskCache", False)),
+            "from_service_worker": bool(response.get("fromServiceWorker", False)),
+            "encoded_data_length": response.get("encodedDataLength"),
+            "status": "response",
+        })
+
+    def _mcp_on_network_loading_finished(self, data):
+        """Mark a buffered CDP Network request as finished."""
+        params = data.get("params", {}) if isinstance(data, dict) else {}
+        self._mcp_update_network_record(params.get("requestId"), {
+            "status": "finished",
+            "finished": True,
+            "failed": False,
+            "encoded_data_length": params.get("encodedDataLength"),
+        })
+
+    def _mcp_on_network_loading_failed(self, data):
+        """Mark a buffered CDP Network request as failed."""
+        params = data.get("params", {}) if isinstance(data, dict) else {}
+        self._mcp_update_network_record(params.get("requestId"), {
+            "status": "failed",
+            "finished": True,
+            "failed": True,
+            "error_text": params.get("errorText", "") or "",
+            "blocked_reason": params.get("blockedReason", "") or "",
+            "canceled": bool(params.get("canceled", False)),
+        })
+
+    async def _mcp_start_network_listen_async(self, clear, max_events):
+        """Enable the CDP Network domain and start buffering network events."""
+        if not self._engine:
+            raise RuntimeError("debug engine not started")
+        self._mcp_attach_network_listeners()
+        try:
+            with self._mcp_network_lock:
+                self._mcp_network_max_events = int(max_events)
+            if clear:
+                self._mcp_clear_network_buffer()
+            result = await self._engine.send_cdp_command("Network.enable", timeout=5.0)
+            if isinstance(result, dict) and result.get("error"):
+                raise RuntimeError(json.dumps(result.get("error"), ensure_ascii=False))
+            self._mcp_network_listening = True
+            return self._mcp_network_snapshot(0, None)
+        except Exception:
+            self._mcp_detach_network_listeners()
+            raise
+
+    def _mcp_network_snapshot(self, limit, since_seq):
+        """Return buffered CDP Network records ordered by latest update sequence."""
+        with self._mcp_network_lock:
+            rows = [
+                dict(self._mcp_network_events[req_id])
+                for req_id in self._mcp_network_order
+                if req_id in self._mcp_network_events
+            ]
+            current_seq = self._mcp_network_seq
+        if since_seq is not None:
+            rows = [row for row in rows if int(row.get("seq", 0) or 0) > since_seq]
+        rows.sort(key=lambda item: int(item.get("seq", 0) or 0))
+        if limit:
+            rows = rows[-limit:]
+        returned_seq = max((int(row.get("seq", 0) or 0) for row in rows), default=since_seq or 0)
+        return {
+            "ok": True,
+            "listening": bool(self._mcp_network_listening),
+            "since_seq": since_seq,
+            "latest_seq": returned_seq,
+            "buffer_latest_seq": current_seq,
+            "events": rows,
+            "count": len(rows),
+        }
+
+    def _mcp_tool_start_network_listen(self, clear, max_events):
+        """Start CDP Network listening through the debug engine."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(
+                self._mcp_start_network_listen_async(clear, max_events),
+                7.0)
+            self._mcp_q.put(("log", f"CDP 网络监听已开启，缓冲上限 {max_events} 条"))
+            return result
+        except Exception as e:
+            self._mcp_network_listening = False
+            return {"ok": False, "error": str(e)}
+
+    def _mcp_tool_stop_network_listen(self):
+        """Stop CDP Network event buffering for MCP callers."""
+        self._mcp_detach_network_listeners()
+        self._mcp_q.put(("log", "CDP 网络监听已停止"))
+        return self._mcp_network_snapshot(0, None)
+
+    def _mcp_tool_get_network_events(self, limit, since_seq):
+        """Read buffered CDP Network request records for MCP callers."""
+        return self._mcp_network_snapshot(limit, since_seq)
+
+    def _mcp_tool_get_network_response_body(self, request_id, timeout, max_chars):
+        """Read one CDP Network response body by requestId."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            result = self._mcp_run_coro(
+                self._engine.send_cdp_command(
+                    "Network.getResponseBody",
+                    {"requestId": request_id},
+                    timeout=timeout),
+                timeout + 1.0)
+            body = result.get("result", {}) if isinstance(result, dict) else {}
+            if isinstance(result, dict) and result.get("error"):
+                return {"ok": False, "error": result.get("error"), "raw": result}
+            text = body.get("body", "")
+            truncated = isinstance(text, str) and len(text) > max_chars
+            if truncated:
+                text = text[:max_chars]
+            return {
+                "ok": True,
+                "request_id": request_id,
+                "body": text,
+                "base64_encoded": bool(body.get("base64Encoded", False)),
+                "truncated": truncated,
+                "body_length": len(body.get("body", "")) if isinstance(body.get("body", ""), str) else 0,
+            }
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -6252,6 +6515,7 @@ class App(QMainWindow):
 
     def _on_fail(self):
         self._mcp_detach_breakpoint_listeners()
+        self._mcp_detach_network_listeners()
         self._mcp_reset_runtime_script_cache()
         self._running = False
         self._btn_start.setEnabled(True)
@@ -6276,6 +6540,7 @@ class App(QMainWindow):
         if not self._running:
             return
         self._mcp_detach_breakpoint_listeners()
+        self._mcp_detach_network_listeners()
         self._mcp_reset_runtime_script_cache()
         self._running = False
         self._poll_route_stop()

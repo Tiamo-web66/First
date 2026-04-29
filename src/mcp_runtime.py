@@ -71,6 +71,46 @@ BASIC_TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "start_network_listen",
+        "description": "Start listening to CDP Network request events and keep them in an MCP-readable buffer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "clear": {"type": "boolean", "description": "Whether to clear the previous network event buffer first."},
+                "max_events": {"type": "number", "description": "Maximum events to keep in memory, capped at 1000."},
+            },
+        },
+    },
+    {
+        "name": "stop_network_listen",
+        "description": "Stop listening to CDP Network events while keeping buffered records available.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_network_events",
+        "description": "Read buffered CDP Network request records. Requires the read requests permission.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number", "description": "Maximum records to return, capped at 200."},
+                "since_seq": {"type": "number", "description": "Only return records updated after this sequence number."},
+            },
+        },
+    },
+    {
+        "name": "get_network_response_body",
+        "description": "Read a CDP Network response body by request_id after the request has finished.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "CDP Network requestId returned by get_network_events."},
+                "timeout": {"type": "number", "description": "Optional timeout in seconds."},
+                "max_chars": {"type": "number", "description": "Maximum response body characters to return, capped at 200000."},
+            },
+            "required": ["request_id"],
+        },
+    },
+    {
         "name": "get_recent_cloud_calls",
         "description": "Read recent captured miniapp cloud, database, storage, or container calls. Requires the read requests permission.",
         "inputSchema": {
