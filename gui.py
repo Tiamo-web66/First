@@ -20,7 +20,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QIcon, QPixmap, QDesktopServices, QFontDatabase,
-    QPen,
+    QPen, QPainterPath,
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -865,6 +865,69 @@ class ThemeIcon(QWidget):
             p.drawEllipse(8, 1, 10, 13)
 
 
+class ThemeTransitionOverlay(QWidget):
+    """用旧界面截图遮罩出从点击点扩散的新主题区域。"""
+
+    finished = Signal()
+
+    def __init__(self, old_pixmap, origin, parent=None):
+        """保存旧界面截图和扩散起点，并准备半径动画。"""
+        super().__init__(parent)
+        self._old_pixmap = old_pixmap
+        self._origin = QPoint(origin)
+        self._radius = 0.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        if parent:
+            self.setGeometry(parent.rect())
+        self._max_radius = self._calc_max_radius() + 2
+        self._anim = QPropertyAnimation(self, b"radius", self)
+        self._anim.setDuration(480)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(float(self._max_radius))
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.finished.connect(self.finished.emit)
+
+    def _calc_max_radius(self):
+        """计算覆盖整个 overlay 所需的最大圆半径。"""
+        corners = (
+            QPoint(0, 0),
+            QPoint(self.width(), 0),
+            QPoint(0, self.height()),
+            QPoint(self.width(), self.height()),
+        )
+        ox, oy = self._origin.x(), self._origin.y()
+        return max(((ox - p.x()) ** 2 + (oy - p.y()) ** 2) ** 0.5 for p in corners)
+
+    def start(self):
+        """显示遮罩并启动圆形扩散动画。"""
+        self.show()
+        self.raise_()
+        self._anim.start()
+
+    def get_radius(self):
+        """返回当前扩散半径。"""
+        return self._radius
+
+    def set_radius(self, value):
+        """更新当前扩散半径并触发重绘。"""
+        self._radius = float(value)
+        self.update()
+
+    radius = Property(float, get_radius, set_radius)
+
+    def paintEvent(self, e):
+        """绘制除扩散圆以外的旧界面截图，让新主题从圆内露出。"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRect(self.rect())
+        hole = QPainterPath()
+        hole.addEllipse(self._origin, self._radius, self._radius)
+        painter.setClipPath(path.subtracted(hole))
+        painter.drawPixmap(self.rect(), self._old_pixmap)
+
+
 class MenuIcon(QWidget):
     """绘制侧栏菜单图标，避免使用字体缩写造成风格不统一。"""
 
@@ -1323,23 +1386,23 @@ class App(QMainWindow):
         self._sb_theme.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._sb_theme.setCursor(Qt.PointingHandCursor)
         self._sb_theme.setFont(QFont(_FN, 9))
-        self._sb_theme.mousePressEvent = lambda e: self._toggle_theme()
+        self._sb_theme.mousePressEvent = lambda e, w=self._sb_theme: self._toggle_theme(w, e)
         sb_lay.addSpacing(8)
         self._sb_theme_icon = ThemeIcon(self._tn)
         self._sb_theme_icon.setCursor(Qt.PointingHandCursor)
-        self._sb_theme_icon.mousePressEvent = lambda e: self._toggle_theme()
+        self._sb_theme_icon.mousePressEvent = lambda e, w=self._sb_theme_icon: self._toggle_theme(w, e)
         self._sb_theme_action = QLabel("切换")
         self._sb_theme_action.setObjectName("sb_theme")
         self._sb_theme_action.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._sb_theme_action.setCursor(Qt.PointingHandCursor)
         self._sb_theme_action.setFont(QFont(_FN, 8))
-        self._sb_theme_action.mousePressEvent = lambda e: self._toggle_theme()
+        self._sb_theme_action.mousePressEvent = lambda e, w=self._sb_theme_action: self._toggle_theme(w, e)
         self._theme_wrap = QWidget()
         self._theme_wrap.setObjectName("theme_switch")
         self._theme_wrap.setFixedHeight(34)
         self._theme_wrap.setCursor(Qt.PointingHandCursor)
         self._theme_wrap.setToolTip("切换浅色 / 深色主题")
-        self._theme_wrap.mousePressEvent = lambda e: self._toggle_theme()
+        self._theme_wrap.mousePressEvent = lambda e, w=self._theme_wrap: self._toggle_theme(w, e)
         theme_lay = QHBoxLayout(self._theme_wrap)
         theme_lay.setContentsMargins(12, 0, 12, 0)
         theme_lay.setSpacing(8)
@@ -4240,9 +4303,21 @@ class App(QMainWindow):
     #  主题
     # ──────────────────────────────────
 
-    def _toggle_theme(self):
+    def _theme_origin(self, source=None, event=None):
+        """计算主题扩散动画在主窗口坐标中的起点。"""
+        if source is not None and event is not None:
+            try:
+                pos = event.position().toPoint()
+            except AttributeError:
+                pos = event.pos()
+            return source.mapTo(self, pos)
+        if hasattr(self, "_theme_wrap"):
+            return self._theme_wrap.mapTo(self, self._theme_wrap.rect().center())
+        return QPoint(0, self.height())
+
+    def _apply_theme_name(self, theme):
         """切换浅色和深色主题，并刷新所有主题敏感控件。"""
-        self._tn = "light" if self._tn == "dark" else "dark"
+        self._tn = theme
         self.setStyleSheet(build_qss(self._tn))
         self._update_theme_label()
         self._update_toggle_colors()
@@ -4256,6 +4331,29 @@ class App(QMainWindow):
         self._hl_sb()
         self._update_window_buttons()
         self._auto_save()
+
+    def _toggle_theme(self, source=None, event=None):
+        """从主题按钮点击位置向外扩散切换浅色和深色主题。"""
+        if getattr(self, "_theme_transitioning", False):
+            return
+        next_theme = "light" if self._tn == "dark" else "dark"
+        origin = self._theme_origin(source, event)
+        old_pixmap = self.grab()
+        overlay = ThemeTransitionOverlay(old_pixmap, origin, self)
+        self._theme_transitioning = True
+        if hasattr(self, "_theme_wrap"):
+            self._theme_wrap.setEnabled(False)
+
+        def finish():
+            """清理主题切换遮罩并恢复主题按钮状态。"""
+            self._theme_transitioning = False
+            if hasattr(self, "_theme_wrap"):
+                self._theme_wrap.setEnabled(True)
+            overlay.deleteLater()
+
+        overlay.finished.connect(finish)
+        self._apply_theme_name(next_theme)
+        overlay.start()
 
     def _update_theme_label(self):
         """刷新侧栏主题切换胶囊中的文字、图标和提示。"""
