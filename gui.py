@@ -1190,6 +1190,7 @@ class App(QMainWindow):
         self._drag_pos = None
         self._cancel_ev = None
         self._route_poll_id = None
+        self._route_polling = False
         self._all_routes = []
         self._flat_routes = []  # tree visual order for prev/next
         self._cloud_scan_active = False
@@ -6656,21 +6657,21 @@ class App(QMainWindow):
         # 自动检测 vConsole 调试状态
         if self._engine and self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._avc_detect_debug(), self._loop)
-        # 延迟获取侧栏信息
+        # 延迟获取路由配置和侧栏信息，成功后会启动当前路由轮询。
         self._sb_fetch_gen += 1
         fetch_gen = self._sb_fetch_gen
-        QTimer.singleShot(1500, lambda: self._delayed_fetch_app_info(fetch_gen))
+        QTimer.singleShot(1500, lambda: self._delayed_fetch_routes(fetch_gen))
         # 自动恢复云扫描
         if not self._cloud_scan_active and self._auditor:
             self._cloud_start_scan()
             self._log_add("info", "[云扫描] 小程序连接后自动恢复捕获")
 
-    def _delayed_fetch_app_info(self, gen):
-        """延迟调用，只有最后一次触发的 gen 匹配才执行。"""
+    def _delayed_fetch_routes(self, gen):
+        """连接稳定后自动拉取路由配置，并启动当前路由轮询。"""
         if gen != self._sb_fetch_gen:
             return
         if self._miniapp_connected and self._engine and self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._afetch_app_info(), self._loop)
+            asyncio.run_coroutine_threadsafe(self._afetch(), self._loop)
 
     def _delayed_clear_app_info(self, gen):
         """延迟清除顶部目标信息，gen 不匹配说明已重连，跳过。"""
@@ -6684,16 +6685,28 @@ class App(QMainWindow):
         self._control_route_lbl.setText("当前路由: --")
 
     def _poll_route_start(self):
+        """Start the single current-route polling loop when the debugger is running."""
+        if self._route_polling:
+            return
+        self._route_polling = True
+        self._poll_route_tick()
+
+    def _poll_route_tick(self):
+        """Poll the current route once and schedule the next route poll."""
         if not self._running:
+            self._route_polling = False
             return
         if self._engine and self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._apoll_route(), self._loop)
-        self._route_poll_id = QTimer.singleShot(2000, self._poll_route_start)
+        self._route_poll_id = QTimer.singleShot(2000, self._poll_route_tick)
 
     def _poll_route_stop(self):
+        """Stop scheduling future current-route polling ticks."""
         self._route_poll_id = None
+        self._route_polling = False
 
     async def _apoll_route(self):
+        """Read the current miniapp route and forward it to the GUI queue."""
         try:
             r = await self._navigator.get_current_route()
             self._rte_q.put(("current", r))
@@ -6701,8 +6714,8 @@ class App(QMainWindow):
                 blocked = await self._navigator.get_blocked_redirects()
                 if blocked:
                     self._rte_q.put(("blocked", blocked))
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_q.put(("debug", f"[导航] 当前路由读取失败: {e}"))
 
     def _sel_route(self):
         items = self._tree.selectedItems()
