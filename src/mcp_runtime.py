@@ -66,6 +66,11 @@ BASIC_TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_capture_state",
+        "description": "Inspect navigator, wx, hook, and capture buffer state in the selected miniapp runtime target.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_recent_cloud_calls",
         "description": "Read recent captured miniapp cloud, database, storage, or container calls. Requires the read requests permission.",
         "inputSchema": {

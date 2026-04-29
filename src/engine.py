@@ -8,7 +8,7 @@ import platform
 import re
 import subprocess
 import sys
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 import frida
@@ -95,6 +95,9 @@ class DebugEngine:
         self._js_contexts = {}
         self._selected_jscontext_id = ""
         self._connected_jscontext_id = ""
+        self._recent_debug_categories = deque(maxlen=20)
+        self._last_observed_jscontext_id = ""
+        self._last_context_diagnostic_state = ""
         self.status = {"frida": False, "miniapp": False, "devtools": False}
 
     def on_status_change(self, callback):
@@ -105,12 +108,94 @@ class DebugEngine:
         self._context_callbacks.append(callback)
 
     def _notify_contexts(self):
+        self._last_context_diagnostic_state = self._context_diagnostic_state()
         snapshot = self.list_js_contexts()
         for cb in self._context_callbacks:
             try:
                 cb(snapshot)
             except Exception:
                 pass
+
+    def _notify_contexts_if_diagnostics_changed(self):
+        """Notify context subscribers when only the diagnostic state changed."""
+        state = self._context_diagnostic_state()
+        if state != self._last_context_diagnostic_state:
+            self._notify_contexts()
+
+    def _remember_debug_category(self, category):
+        """Record one recently seen miniapp debug message category."""
+        name = str(category or "").strip()
+        if name:
+            self._recent_debug_categories.append(name)
+
+    def _observe_js_context(self, jscontext_id, jscontext_name="", connected=False, source="observed"):
+        """Upsert one js context discovered from protocol events or CDP traffic."""
+        ctx_id = str(jscontext_id or "").strip()
+        if not ctx_id:
+            return False
+        row = self._js_contexts.get(ctx_id, {}).copy()
+        row["jscontext_id"] = ctx_id
+        if jscontext_name:
+            row["jscontext_name"] = str(jscontext_name or "")
+        else:
+            row.setdefault("jscontext_name", "")
+        if source:
+            row["source"] = str(source)
+        changed = self._js_contexts.get(ctx_id) != row
+        self._js_contexts[ctx_id] = row
+        self._last_observed_jscontext_id = ctx_id
+        if connected and self._connected_jscontext_id != ctx_id:
+            self._connected_jscontext_id = ctx_id
+            changed = True
+        prev_selected = self._selected_jscontext_id
+        self._maybe_autoselect_context()
+        if self._selected_jscontext_id != prev_selected:
+            changed = True
+        return changed
+
+    def get_debug_context_summary(self):
+        """Return recent protocol hints useful for js context diagnostics."""
+        return {
+            "recent_debug_categories": list(self._recent_debug_categories),
+            "last_observed_jscontext_id": self._last_observed_jscontext_id,
+            "connected_jscontext_id": self._connected_jscontext_id,
+        }
+
+    def _context_diagnostic_state(self):
+        """Return the compact state name for JS context availability diagnostics."""
+        if self._js_contexts:
+            return "enumerated"
+        if not self.status.get("miniapp", False):
+            return "miniapp_disconnected"
+        if any(category == "chromeDevtoolsResult" for category in self._recent_debug_categories):
+            return "default_runtime_without_ids"
+        return "waiting_for_contexts"
+
+    def get_js_context_diagnostics(self):
+        """Describe whether the miniapp runtime has advertised selectable JS contexts."""
+        contexts = self.list_js_contexts()
+        recent_categories = list(self._recent_debug_categories)
+        state = self._context_diagnostic_state()
+        if state == "enumerated":
+            state = "enumerated"
+            hint = "JS contexts have been advertised by the miniapp runtime."
+        elif state == "miniapp_disconnected":
+            hint = "Miniapp has not connected to the fixed debug server port."
+        elif state == "default_runtime_without_ids":
+            hint = (
+                "The runtime is responding to CDP commands, but protocol messages do not "
+                "include jscontext_id values; commands are using the default runtime."
+            )
+        else:
+            hint = "Miniapp is connected, but no addJsContext/connectJsContext message has been observed yet."
+        return {
+            "state": state,
+            "hint": hint,
+            "target_count": len(contexts),
+            "last_observed_jscontext_id": self._last_observed_jscontext_id,
+            "connected_jscontext_id": self._connected_jscontext_id,
+            "recent_debug_categories": recent_categories,
+        }
 
     def _notify_status(self, key, value):
         self.status[key] = value
@@ -119,6 +204,7 @@ class DebugEngine:
                 cb(dict(self.status))
             except Exception:
                 pass
+        self._notify_contexts_if_diagnostics_changed()
 
     def _next_cmd_id(self):
         self._cmd_counter += 1
@@ -167,6 +253,9 @@ class DebugEngine:
         self._js_contexts.clear()
         self._selected_jscontext_id = ""
         self._connected_jscontext_id = ""
+        self._last_observed_jscontext_id = ""
+        self._recent_debug_categories.clear()
+        self._last_context_diagnostic_state = ""
         self._notify_contexts()
         self.logger.info("[server] engine stopped")
 
@@ -288,6 +377,7 @@ class DebugEngine:
             rows.append({
                 "jscontext_id": ctx_id,
                 "jscontext_name": name,
+                "source": item.get("source", ""),
                 "kind": kind,
                 "recommended": kind == "appservice",
                 "selected": ctx_id == self._selected_jscontext_id,
@@ -527,6 +617,9 @@ class DebugEngine:
                     engine._js_contexts.clear()
                     engine._selected_jscontext_id = ""
                     engine._connected_jscontext_id = ""
+                    engine._last_observed_jscontext_id = ""
+                    engine._recent_debug_categories.clear()
+                    engine._last_context_diagnostic_state = ""
                     engine._notify_contexts()
                     # 清理所有挂起的 CDP 响应，防止 future 泄漏
                     for fid, fut in list(engine._pending_responses.items()):
@@ -561,15 +654,14 @@ class DebugEngine:
             return
 
         category = unwrapped_data.get("category")
+        self._remember_debug_category(category)
         data = unwrapped_data.get("data", {}) if isinstance(unwrapped_data.get("data"), dict) else {}
         if category == "addJsContext":
-            ctx_id = str(data.get("jscontext_id", "") or "").strip()
-            if ctx_id:
-                self._js_contexts[ctx_id] = {
-                    "jscontext_id": ctx_id,
-                    "jscontext_name": str(data.get("jscontext_name", "") or ""),
-                }
-                self._maybe_autoselect_context()
+            if self._observe_js_context(
+                data.get("jscontext_id", ""),
+                data.get("jscontext_name", ""),
+                source="addJsContext",
+            ):
                 self._notify_contexts()
         elif category == "removeJsContext":
             ctx_id = str(data.get("jscontext_id", "") or "").strip()
@@ -582,16 +674,20 @@ class DebugEngine:
                 self._maybe_autoselect_context()
                 self._notify_contexts()
         elif category == "connectJsContext":
-            ctx_id = str(data.get("jscontext_id", "") or "").strip()
-            if ctx_id:
-                self._connected_jscontext_id = ctx_id
-                if ctx_id not in self._js_contexts:
-                    self._js_contexts[ctx_id] = {
-                        "jscontext_id": ctx_id,
-                        "jscontext_name": "",
-                    }
-                self._maybe_autoselect_context()
+            if self._observe_js_context(
+                data.get("jscontext_id", ""),
+                connected=True,
+                source="connectJsContext",
+            ):
                 self._notify_contexts()
+        elif category in ("chromeDevtools", "chromeDevtoolsResult"):
+            if self._observe_js_context(
+                data.get("jscontext_id", ""),
+                connected=(category == "chromeDevtoolsResult"),
+                source=category,
+            ):
+                self._notify_contexts()
+        self._notify_contexts_if_diagnostics_changed()
 
         if category == "chromeDevtoolsResult":
             payload = data.get("payload", "")

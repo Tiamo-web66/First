@@ -4423,6 +4423,19 @@ class App(QMainWindow):
             parts.append("active")
         return " | ".join(parts)
 
+    def _mcp_target_empty_hint(self):
+        """Return a specific UI hint when no selectable JS runtime target is advertised."""
+        if self._engine:
+            diag = self._engine.get_js_context_diagnostics()
+            state = diag.get("state", "")
+            if state == "default_runtime_without_ids":
+                return "已连接，当前运行时未暴露可选 JS Context"
+            if state == "miniapp_disconnected":
+                return "未连接小程序"
+            if state == "waiting_for_contexts":
+                return "等待小程序上报 JS Context"
+        return "未发现 JS Context"
+
     def _refresh_mcp_target_combo(self, contexts):
         """Refresh the MCP target combo box from the latest JS context snapshot."""
         self._mcp_targets = list(contexts or [])
@@ -4447,7 +4460,7 @@ class App(QMainWindow):
             self._mcp_target_syncing = False
 
         if not self._mcp_targets:
-            self._mcp_target_hint_lbl.setText("未发现 JS Context")
+            self._mcp_target_hint_lbl.setText(self._mcp_target_empty_hint())
         else:
             selected = next((ctx for ctx in self._mcp_targets if ctx.get("selected")), None)
             recommended = next((ctx for ctx in self._mcp_targets if ctx.get("recommended")), None)
@@ -4632,6 +4645,8 @@ class App(QMainWindow):
         """Build a lightweight state snapshot returned by the MCP service."""
         sts = self._engine.status if self._engine else {}
         selected_target = self._engine.get_selected_js_context() if self._engine else {}
+        debug_context = self._engine.get_debug_context_summary() if self._engine else {}
+        target_diagnostics = self._engine.get_js_context_diagnostics() if self._engine else {}
         return {
             "ok": True,
             "debug_running": self._running,
@@ -4642,6 +4657,10 @@ class App(QMainWindow):
             "route": self._mcp_route,
             "selected_target": selected_target,
             "target_count": len(self._engine.list_js_contexts()) if self._engine else 0,
+            "target_diagnostics": target_diagnostics,
+            "recent_debug_categories": debug_context.get("recent_debug_categories", []),
+            "last_observed_jscontext_id": debug_context.get("last_observed_jscontext_id", ""),
+            "connected_jscontext_id": debug_context.get("connected_jscontext_id", ""),
             "permissions": dict(self._mcp_permissions),
         }
 
@@ -4704,6 +4723,10 @@ class App(QMainWindow):
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
             return self._mcp_tool_clear_requests()
+        if name == "get_capture_state":
+            if not self._mcp_require_permission("read_requests"):
+                return {"ok": False, "error": "permission denied: read_requests"}
+            return self._mcp_tool_get_capture_state()
         if name == "get_recent_cloud_calls":
             if not self._mcp_require_permission("read_requests"):
                 return {"ok": False, "error": "permission denied: read_requests"}
@@ -5021,6 +5044,17 @@ class App(QMainWindow):
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def _mcp_tool_get_capture_state(self):
+        """Inspect current navigator and request-hook state on the selected runtime target."""
+        reason = self._mcp_require_runtime()
+        if reason:
+            return {"ok": False, "error": reason}
+        try:
+            state = self._mcp_run_coro(self._navigator.get_capture_state(), 6.0)
+            return state if isinstance(state, dict) else {"ok": False, "error": "capture state unavailable"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def _mcp_tool_get_recent_cloud_calls(self, limit):
         """Read recent captured cloud, database, storage, or container calls."""
         reason = self._mcp_require_runtime()
@@ -5053,6 +5087,7 @@ class App(QMainWindow):
         return {
             "targets": self._engine.list_js_contexts() if self._engine else [],
             "selected_target": self._engine.get_selected_js_context() if self._engine else {},
+            "diagnostics": self._engine.get_js_context_diagnostics() if self._engine else {},
         }
 
     async def _mcp_select_target_async(self, jscontext_id):
@@ -6250,12 +6285,15 @@ class App(QMainWindow):
             if result:
                 import json as _json
                 try:
-                    info = _json.loads(result)
-                    if info.get("err"):
-                        self._log_q.put(("error", f"[导航] 刷新失败: {info['err']}"))
+                    info = _json.loads(result) if isinstance(result, str) else result
+                    if isinstance(info, dict):
+                        err = info.get("err") or info.get("error")
+                        if err or info.get("ok") is False:
+                            self._log_q.put(("error", f"[导航] 刷新失败: {err or 'unknown error'}"))
+                            return
+                        route = info.get("route", "")
+                        self._log_q.put(("info", f"[导航] 已刷新页面: /{route}"))
                         return
-                    route = info.get("route", "")
-                    self._log_q.put(("info", f"[导航] 已刷新页面: /{route}"))
                 except (_json.JSONDecodeError, TypeError):
                     self._log_q.put(("info", "[导航] 已刷新页面"))
             else:
