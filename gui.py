@@ -2166,9 +2166,10 @@ class App(QMainWindow):
         self._mcp_devtools_lbl = QLabel("CDP: 未连接")
         self._mcp_app_lbl = QLabel("AppID: --")
         self._mcp_route_lbl = QLabel("当前路由: --")
+        self._mcp_runtime_lbl = QLabel("运行时: 未启动")
         for lbl in (self._mcp_frida_lbl, self._mcp_miniapp_lbl,
                     self._mcp_devtools_lbl, self._mcp_app_lbl,
-                    self._mcp_route_lbl):
+                    self._mcp_route_lbl, self._mcp_runtime_lbl):
             lbl.setProperty("class", "muted")
 
         status_grid = QGridLayout()
@@ -2178,17 +2179,18 @@ class App(QMainWindow):
         status_grid.addWidget(self._mcp_miniapp_lbl, 0, 1)
         status_grid.addWidget(self._mcp_devtools_lbl, 1, 0)
         status_grid.addWidget(self._mcp_app_lbl, 1, 1)
-        status_grid.addWidget(self._mcp_route_lbl, 2, 0, 1, 2)
+        status_grid.addWidget(self._mcp_runtime_lbl, 2, 0)
+        status_grid.addWidget(self._mcp_route_lbl, 2, 1)
         status_lay.addLayout(status_grid)
 
         target_row = QHBoxLayout()
         target_row.setSpacing(10)
-        target_row.addWidget(QLabel("Target"))
+        target_row.addWidget(QLabel("运行时模式"))
         self._mcp_target_combo = QComboBox()
         self._mcp_target_combo.setMinimumWidth(320)
         self._mcp_target_combo.currentIndexChanged.connect(self._on_mcp_target_changed)
         target_row.addWidget(self._mcp_target_combo, 1)
-        self._mcp_target_hint_lbl = QLabel("未发现 JS Context")
+        self._mcp_target_hint_lbl = QLabel("等待小程序连接")
         self._mcp_target_hint_lbl.setProperty("class", "muted")
         target_row.addWidget(self._mcp_target_hint_lbl)
         status_lay.addLayout(target_row)
@@ -4415,7 +4417,9 @@ class App(QMainWindow):
         self._target_appid_lbl.setText(f"AppID {app_id_text}")
         self._target_appid_lbl.setToolTip(app_id)
         self._target_cdp_lbl.setText(f"CDP :{self._cp_ent.text() if hasattr(self, '_cp_ent') else '--'}")
-        self._target_status_lbl.setText("已连接" if is_connected else "未连接")
+        runtime_mode, runtime_detail, runtime_state = self._runtime_mode_info()
+        status_text = runtime_mode if is_connected else "未连接"
+        self._target_status_lbl.setText(status_text)
         self._target_status_lbl.setStyleSheet(
             f"color: {c['success'] if is_connected else c['text3']};"
             f"background: {'#183527' if self._tn == 'dark' and is_connected else '#263044' if self._tn == 'dark' else '#eaf7ef' if is_connected else '#f3f6fb'};"
@@ -4423,7 +4427,7 @@ class App(QMainWindow):
         )
         self._target_badge.setToolTip(
             f"当前目标: {app_name}\nAppID: {app_id}\nCDP 端口: {self._target_cdp_lbl.text()}\n"
-            f"状态: {'已连接' if is_connected else '未连接'}\n点击复制目标信息"
+            f"状态: {status_text}\n运行时: {runtime_detail}\n点击复制目标信息"
         )
 
     def _copy_target_summary(self):
@@ -4503,7 +4507,7 @@ class App(QMainWindow):
         """Append one MCP log line to the MCP page log box."""
         if not hasattr(self, "_mcp_logbox"):
             return
-        self._mcp_logbox.append(text)
+        self._mcp_logbox.append(self._mcp_log_html(text))
         sb = self._mcp_logbox.verticalScrollBar()
         sb.setValue(sb.maximum())
 
@@ -4521,18 +4525,43 @@ class App(QMainWindow):
             parts.append("active")
         return " | ".join(parts)
 
+    def _runtime_mode_info(self):
+        """Return the current runtime mode label, detail, and diagnostic state."""
+        if not self._engine or not self._running:
+            return "未启动", "启动调试后，运行时状态会显示在这里。", "not_started"
+        diag = self._engine.get_js_context_diagnostics()
+        state = diag.get("state", "")
+        if state == "enumerated":
+            target = self._engine.get_selected_js_context()
+            name = target.get("jscontext_name") or target.get("jscontext_id") or "自动选择"
+            return "可选 Target", f"当前: {name}", state
+        if state == "default_runtime_without_ids":
+            return "默认运行时", "小程序已连接；工具将通过默认运行时和 wxFrame 执行操作。", state
+        if state == "miniapp_disconnected":
+            return "等待小程序", "启动调试后，打开目标小程序即可建立运行时连接。", state
+        if state == "waiting_for_contexts":
+            return "等待运行时", "小程序已连接，正在等待运行时上报上下文。", state
+        return "运行时未知", "暂未获得运行时诊断信息。", state
+
     def _mcp_target_empty_hint(self):
         """Return a specific UI hint when no selectable JS runtime target is advertised."""
+        label, detail, _ = self._runtime_mode_info()
+        if label == "默认运行时":
+            return "通过默认运行时和 wxFrame 执行操作"
+        if label == "等待小程序":
+            return "等待小程序连接"
+        if label == "等待运行时":
+            return "等待运行时上下文"
         if self._engine:
             diag = self._engine.get_js_context_diagnostics()
             state = diag.get("state", "")
             if state == "default_runtime_without_ids":
-                return "已连接，当前运行时未暴露可选 JS Context"
+                return "通过默认运行时和 wxFrame 执行操作"
             if state == "miniapp_disconnected":
-                return "未连接小程序"
+                return "等待小程序连接"
             if state == "waiting_for_contexts":
-                return "等待小程序上报 JS Context"
-        return "未发现 JS Context"
+                return "等待运行时上下文"
+        return detail
 
     def _refresh_mcp_target_combo(self, contexts):
         """Refresh the MCP target combo box from the latest JS context snapshot."""
@@ -4547,7 +4576,15 @@ class App(QMainWindow):
         try:
             combo = self._mcp_target_combo
             combo.clear()
-            combo.addItem("自动选择（推荐）", "")
+            if not self._mcp_targets:
+                mode, detail, _ = self._runtime_mode_info()
+                combo.addItem(mode, "")
+                combo.setEnabled(False)
+                combo.setToolTip(detail)
+            else:
+                combo.setEnabled(True)
+                combo.setToolTip("选择一个小程序运行时 target；自动选择会优先使用 appservice。")
+                combo.addItem("自动选择（推荐）", "")
             target_index = 0
             for idx, item in enumerate(self._mcp_targets, start=1):
                 combo.addItem(self._mcp_target_label(item), item.get("jscontext_id", ""))
@@ -4558,13 +4595,16 @@ class App(QMainWindow):
             self._mcp_target_syncing = False
 
         if not self._mcp_targets:
-            self._mcp_target_hint_lbl.setText(self._mcp_target_empty_hint())
+            hint = self._mcp_target_empty_hint()
+            self._mcp_target_hint_lbl.setText(hint)
+            self._mcp_target_hint_lbl.setToolTip(self._runtime_mode_info()[1])
         else:
             selected = next((ctx for ctx in self._mcp_targets if ctx.get("selected")), None)
             recommended = next((ctx for ctx in self._mcp_targets if ctx.get("recommended")), None)
             current = selected or recommended or self._mcp_targets[0]
             hint = current.get("jscontext_name", "") or current.get("jscontext_id", "") or "unknown"
             self._mcp_target_hint_lbl.setText(f"当前: {hint}")
+            self._mcp_target_hint_lbl.setToolTip("已发现可选运行时 target。")
 
     def _on_mcp_target_changed(self, index):
         """Apply one manually selected MCP JS runtime target."""
@@ -4573,6 +4613,8 @@ class App(QMainWindow):
         if not self._engine or not self._loop or not self._loop.is_running():
             return
         target_id = self._mcp_target_combo.itemData(index) if hasattr(self, "_mcp_target_combo") else ""
+        if not target_id and not self._mcp_targets:
+            return
         asyncio.run_coroutine_threadsafe(self._engine.activate_js_context(target_id), self._loop)
 
     def _set_mcp_permission(self, key, enabled):
@@ -4736,6 +4778,11 @@ class App(QMainWindow):
             on = sts.get(key, False)
             lbl.setText(f"{name}: {'已连接' if on else '未连接'}")
             lbl.setStyleSheet(f"color: {c['success'] if on else c['text2']};")
+        mode, detail, state = self._runtime_mode_info()
+        self._mcp_runtime_lbl.setText(f"运行时: {mode}")
+        runtime_ok = state in ("enumerated", "default_runtime_without_ids")
+        self._mcp_runtime_lbl.setStyleSheet(f"color: {c['success'] if runtime_ok else c['text2']};")
+        self._mcp_runtime_lbl.setToolTip(detail)
         self._mcp_app_lbl.setText(f"AppID: {self._mcp_appid or '--'}")
         self._mcp_route_lbl.setText(f"当前路由: /{self._mcp_route}" if self._mcp_route else "当前路由: --")
 
@@ -4745,6 +4792,7 @@ class App(QMainWindow):
         selected_target = self._engine.get_selected_js_context() if self._engine else {}
         debug_context = self._engine.get_debug_context_summary() if self._engine else {}
         target_diagnostics = self._engine.get_js_context_diagnostics() if self._engine else {}
+        runtime_mode, runtime_detail, runtime_state = self._runtime_mode_info()
         return {
             "ok": True,
             "debug_running": self._running,
@@ -4755,6 +4803,9 @@ class App(QMainWindow):
             "route": self._mcp_route,
             "selected_target": selected_target,
             "target_count": len(self._engine.list_js_contexts()) if self._engine else 0,
+            "runtime_mode": runtime_mode,
+            "runtime_state": runtime_state,
+            "runtime_detail": runtime_detail,
             "target_diagnostics": target_diagnostics,
             "recent_debug_categories": debug_context.get("recent_debug_categories", []),
             "last_observed_jscontext_id": debug_context.get("last_observed_jscontext_id", ""),
@@ -5966,6 +6017,15 @@ class App(QMainWindow):
 
     _LOG_MAX_BLOCKS = 500  # 最多保留的日志行数
 
+    def _html_escape(self, text):
+        """Escape plain text before embedding it in QTextEdit HTML."""
+        return (
+            str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
     def _filtered_log_entries(self):
         """返回符合运行日志页当前关键字和级别筛选条件的日志记录。"""
         kw = ""
@@ -5994,7 +6054,53 @@ class App(QMainWindow):
             "warn": c["warning"],
         }
         color = color_map.get(lv, c["text2"])
-        return f'<span style="color:{color}">{txt}</span>'
+        label_map = {
+            "info": "INFO",
+            "error": "ERROR",
+            "debug": "DEBUG",
+            "frida": "FRIDA",
+            "warn": "WARN",
+        }
+        label = label_map.get(lv, str(lv or "LOG").upper())
+        source = ""
+        match = re.match(r"^\[([^\]]+)\]", str(txt or ""))
+        if match:
+            source = match.group(1).upper()[:12]
+        badge_bg = c["input"] if self._tn == "dark" else c["sb_active"]
+        badge = (
+            f'<span style="color:{color}; background:{badge_bg}; '
+            'border-radius:3px; padding:1px 5px; font-weight:bold;">'
+            f'{label}</span>'
+        )
+        source_badge = (
+            f' <span style="color:{c["accent"]}; font-weight:bold;">{self._html_escape(source)}</span>'
+            if source else ""
+        )
+        return f'{badge}{source_badge} <span style="color:{color}">{self._html_escape(txt)}</span>'
+
+    def _mcp_log_html(self, text):
+        """Render one MCP log line with a compact source badge."""
+        c = _TH[self._tn]
+        text = str(text)
+        lowered = text.lower()
+        if "拒绝" in text or "denied" in lowered or "error" in lowered:
+            color = c["error"]
+            label = "ERROR"
+        elif "权限" in text:
+            color = c["warning"]
+            label = "PERM"
+        elif "tool:" in lowered or "调用工具" in text:
+            color = c["accent"]
+            label = "TOOL"
+        else:
+            color = c["text2"]
+            label = "MCP"
+        badge_bg = c["input"] if self._tn == "dark" else c["sb_active"]
+        return (
+            f'<span style="color:{color}; background:{badge_bg}; '
+            f'border-radius:3px; padding:1px 5px; font-weight:bold;">{label}</span> '
+            f'<span style="color:{color}">{self._html_escape(text)}</span>'
+        )
 
     def _render_logbox(self):
         """根据当前筛选条件重绘运行日志页面，不影响控制台日志。"""
@@ -6582,6 +6688,24 @@ class App(QMainWindow):
             self._route_empty_hint.setText(message)
         self._route_empty_hint.show()
 
+    def _update_runtime_empty_hints(self):
+        """Refresh empty-state copy for pages that depend on a connected miniapp."""
+        connected = bool(getattr(self, "_miniapp_connected", False))
+        if hasattr(self, "_route_empty_hint") and not (self._flat_routes or self._all_routes):
+            self._route_empty_hint.setText(
+                "等待小程序连接\n启动调试后，打开目标小程序即可加载路由。"
+                if not connected else
+                "小程序已连接\n点击「获取路由」加载页面列表。"
+            )
+            self._route_empty_hint.show()
+        if hasattr(self, "_cloud_empty_hint") and not getattr(self, "_cloud_all_items", []):
+            self._cloud_empty_hint.setText(
+                "等待小程序连接\n连接后可开启捕获云函数、数据库、存储或容器调用。"
+                if not connected else
+                "等待捕获记录\n触发小程序操作后，云函数和数据库调用会显示在这里。"
+            )
+            self._cloud_empty_hint.show()
+
     def _do_filter(self):
         q = self._srch_ent.text().strip().lower()
         if not q:
@@ -7041,6 +7165,7 @@ class App(QMainWindow):
         if is_connected:
             QTimer.singleShot(1500, lambda: self._delayed_stable_connect(gen_stable))
         self._miniapp_connected = is_connected
+        self._update_runtime_empty_hints()
         self._update_flow_steps(sts)
 
     def _handle_rte(self, item):
