@@ -136,6 +136,28 @@ _CFG_FILE = os.path.join(_BASE_DIR, "gui_config.json")
 os.makedirs(os.path.join(_BASE_DIR, "hook_scripts"), exist_ok=True)
 
 
+def _bundle_path(*parts):
+    """返回 PyInstaller 资源目录或源码根目录下的路径。"""
+    root = getattr(sys, "_MEIPASS", _BASE_DIR)
+    return os.path.join(root, *parts)
+
+
+def _extract_worker_cmd(action):
+    """构建敏感信息提取 worker 的启动命令，兼容源码运行和 exe 打包运行。"""
+    if getattr(sys, 'frozen', False):
+        candidates = [
+            os.path.join(_BASE_DIR, "src", "extract_worker.exe"),
+            os.path.join(_BASE_DIR, "extract_worker.exe"),
+            _bundle_path("src", "extract_worker.exe"),
+            _bundle_path("extract_worker.exe"),
+        ]
+        for worker_path in candidates:
+            if os.path.exists(worker_path):
+                return [worker_path, action]
+        raise FileNotFoundError("extract_worker.exe not found")
+    return [sys.executable, os.path.join(_BASE_DIR, "src", "extract_worker.py"), action]
+
+
 def _load_cfg():
     try:
         with open(_CFG_FILE, "r", encoding="utf-8") as f:
@@ -3018,13 +3040,15 @@ class App(QMainWindow):
         os.makedirs(app_output, exist_ok=True)
 
         pkg_dir = self._ext_path_ent.text().strip()
-        worker_path = os.path.join(_BASE_DIR, "src", "extract_worker.py")
-        cmd = [
-            sys.executable, worker_path, "decompile",
+        try:
+            cmd = _extract_worker_cmd("decompile") + [
             "--packages-dir", pkg_dir,
             "--appid", appid,
             "--output-dir", app_output,
-        ]
+            ]
+        except Exception as e:
+            self._ext_log(f"Start failed: {e}")
+            return
 
         self._ext_log(f"开始反编译: {appid}")
         self._ext_prog.setValue(0)
@@ -3075,12 +3099,14 @@ class App(QMainWindow):
             with open(custom_file, "w", encoding="utf-8") as f:
                 json.dump(self._ext_custom_patterns, f, ensure_ascii=False)
 
-        worker_path = os.path.join(_BASE_DIR, "src", "extract_worker.py")
-        cmd = [
-            sys.executable, worker_path, "scan",
+        try:
+            cmd = _extract_worker_cmd("scan") + [
             "--scan-dir", decompile_dir,
             "--output-dir", result_dir,
-        ]
+            ]
+        except Exception as e:
+            self._ext_log(f"Start failed: {e}")
+            return
         if custom_file:
             cmd += ["--custom-patterns", custom_file]
 
